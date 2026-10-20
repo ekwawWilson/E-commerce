@@ -1,0 +1,962 @@
+// Prisma Schema for E-Commerce Application
+// Database: PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL") // Temporarily disabled - port 5432 blocked
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum PaymentMethod {
+  MOMO           // Mobile Money
+  COD            // Cash on Delivery
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+}
+
+enum DeliveryStatus {
+  PENDING
+  PICKED_UP
+  IN_TRANSIT
+  DELIVERED
+}
+
+enum AdminRole {
+  ADMIN
+  SUPER_ADMIN
+  SUPPORT        // Customer support only
+}
+
+enum MobileMoneyProvider {
+  MTN_MOMO           // MTN Mobile Money
+  TELECEL_CASH       // Telecel Cash (formerly Vodafone Cash)
+  AIRTELTIGO_MONEY   // AirtelTigo Money
+}
+
+enum ReportType {
+  SALES
+  INVENTORY
+  ORDERS
+  PAYMENTS
+  DELIVERIES
+}
+
+enum ReportStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+// Multi-supplier enums
+enum SupplierStatus {
+  PENDING        // Awaiting approval
+  ACTIVE         // Can sell
+  SUSPENDED      // Temporarily disabled
+  REJECTED       // Application rejected
+}
+
+enum SupplierRole {
+  OWNER          // Full access, can manage staff
+  MANAGER        // Can manage products, orders, view payouts
+  STAFF          // Can only manage products and view orders
+}
+
+enum FulfillmentStatus {
+  PENDING        // Awaiting supplier action
+  CONFIRMED      // Supplier confirmed
+  PROCESSING     // Being prepared
+  SHIPPED        // Handed to delivery
+  DELIVERED      // Completed
+  CANCELLED      // Cancelled
+}
+
+enum PayoutStatus {
+  PENDING        // Awaiting processing
+  PROCESSING     // Being processed
+  COMPLETED      // Successfully paid
+  FAILED         // Payment failed
+}
+
+// ============================================
+// ADMIN & AUTHENTICATION
+// ============================================
+
+model Admin {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  name         String
+  role         AdminRole @default(ADMIN)
+  active       Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // Relations
+  reports      Report[]
+  auditLogs    AuditLog[]
+
+  @@map("admins")
+}
+
+// ============================================
+// CUSTOMERS
+// ============================================
+
+model Customer {
+  id                  String           @id @default(cuid())
+
+  // Auth
+  email               String           @unique
+  phone               String           @unique
+  passwordHash        String
+
+  // OAuth
+  googleId            String?          @unique
+  appleId             String?          @unique
+
+  // Profile
+  name                String
+  profileImage        String?
+
+  // Preferences
+  preferredPaymentMethod PaymentMethod?
+
+  // Activity Tracking
+  lastLoginAt         DateTime?
+  emailVerified       Boolean          @default(false)
+  emailVerifiedAt     DateTime?
+  phoneVerified       Boolean          @default(false)
+  phoneVerifiedAt     DateTime?
+
+  // Account Status
+  active              Boolean          @default(true)
+
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  // Relations
+  addresses           CustomerAddress[]
+  orders              Order[]
+  wishlistItems       WishlistItem[]
+  carts               Cart[]           // Customer can have multiple carts (active one)
+
+  @@index([email])
+  @@index([phone])
+  @@index([googleId])
+  @@index([active])
+  @@map("customers")
+}
+
+model CustomerAddress {
+  id          String    @id @default(cuid())
+  customerId  String
+  customer    Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  label       String?   // "Home", "Work", "Office", etc.
+  name        String    // Recipient name
+  phone       String    // Contact phone
+  address     String    // Street address
+  city        String
+  region      String?
+  landmark    String?   // Nearby landmark for easier delivery
+
+  isDefault   Boolean   @default(false)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([customerId])
+  @@index([customerId, isDefault])
+  @@map("customer_addresses")
+}
+
+model WishlistItem {
+  id          String    @id @default(cuid())
+  customerId  String
+  customer    Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  productId   String
+
+  createdAt   DateTime  @default(now())
+
+  @@unique([customerId, productId])
+  @@index([customerId])
+  @@map("wishlist_items")
+}
+
+// ============================================
+// SUPPLIERS (Multi-vendor/Multi-supplier)
+// ============================================
+
+model Supplier {
+  id                String         @id @default(cuid())
+
+  // Basic Info
+  name              String
+  slug              String         @unique
+  description       String?
+  logo              String?        // Logo URL
+  banner            String?        // Banner image URL
+
+  // Contact
+  email             String         @unique
+  phone             String
+  whatsapp          String?
+
+  // Business Info
+  businessName      String?
+  businessAddress   String
+  city              String
+  region            String
+  taxId             String?        // Tax identification number
+
+  // Banking (for payouts)
+  bankName          String?
+  bankAccountNumber String?
+  bankAccountName   String?
+  momoNumber        String?        // Mobile money for payouts
+  momoProvider      MobileMoneyProvider?
+
+  // Platform Settings
+  commissionRate    Decimal        @default(10) @db.Decimal(5, 2) // Platform commission %
+  maxUsers          Int            @default(5)  // Max supplier admins allowed
+  maxProducts       Int            @default(20) // Max products supplier can post
+  status            SupplierStatus @default(PENDING)
+  verified          Boolean        @default(false)
+  verifiedAt        DateTime?
+
+  // Timestamps
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  // Relations
+  admins            SupplierAdmin[]
+  products          Product[]
+  orderItems        OrderItem[]
+  payouts           SupplierPayout[]
+
+  @@index([status])
+  @@index([verified])
+  @@index([slug])
+  @@map("suppliers")
+}
+
+model SupplierAdmin {
+  id            String       @id @default(cuid())
+  supplierId    String
+
+  email         String       @unique
+  passwordHash  String
+  name          String
+  phone         String?
+  role          SupplierRole @default(STAFF)
+  permissions   Json?        // Custom permissions override (null = use role defaults)
+
+  active        Boolean      @default(true)
+  lastLoginAt   DateTime?
+
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  supplier      Supplier     @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+
+  @@index([supplierId])
+  @@map("supplier_admins")
+}
+
+// ============================================
+// PRODUCTS & CATEGORIES
+// ============================================
+
+model Category {
+  id          String            @id @default(cuid())
+  name        String
+  slug        String            @unique
+  description String?
+  image       String?
+  parentId    String?
+  parent      Category?         @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children    Category[]        @relation("CategoryHierarchy")
+  products    ProductCategory[] // Many-to-many relationship with products
+  active      Boolean           @default(true)
+  sortOrder   Int               @default(0)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@map("categories")
+}
+
+model Product {
+  id                String                 @id @default(cuid())
+  name              String
+  slug              String                 @unique
+  description       String?
+  // price and stock are DENORMALISED ROLLUPS over ProductVariant:
+  //   price = cheapest active variant ("from GH₵X"), stock = sum of variants.
+  // They stay on Product so catalogue filtering/sorting works on plain indexed
+  // columns. Never write them directly — use recalcProductRollup().
+  price             Decimal                @db.Decimal(10, 2)
+  currency          String                 @default("GHS") // Ghanaian Cedi
+  comparePrice      Decimal?               @db.Decimal(10, 2) // Original price for sale items
+  // Grouping code only; the unique per-item SKU lives on ProductVariant.
+  sku               String?
+  stock             Int                    @default(0)
+  lowStockThreshold Int                    @default(5)
+
+  // Pre-order and Delivery Settings
+  isPreorder        Boolean                @default(false)    // All products can be pre-order
+  preorderNote      String?                                   // Note shown to customers (e.g., "Ships in 2-3 weeks")
+
+  // Supplier relationship
+  supplierId        String?
+  supplier          Supplier?              @relation(fields: [supplierId], references: [id])
+
+  categories        ProductCategory[]      // Many-to-many relationship with categories
+  images            ProductImage[]
+  specifications    ProductSpecification[] // Dynamic key-value specifications
+  deliveryZones     ProductDeliveryZone[]  // Delivery periods by zone/region
+  variants          ProductVariant[]       // Sellable units (price/stock live here)
+  options           ProductOption[]        // Variant axes, e.g. Storage / Colour
+  active            Boolean                @default(true)
+  featured          Boolean                @default(false)
+  cartItems         CartItem[]
+  orderItems        OrderItem[]            // Order items containing this product
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  @@index([active, featured])
+  @@index([slug])
+  @@index([supplierId])
+  @@index([supplierId, active])
+  @@index([isPreorder])
+  @@map("products")
+}
+
+// ============================================
+// PRODUCT VARIANTS
+// ============================================
+
+// A sellable unit of a product — "iPhone 15 Pro / 256GB / Graphite".
+// Price and stock live here, NOT on Product (Product.price/stock are rollups).
+// Every product has at least one variant; simple products get a synthesised
+// "Default" variant so cart/checkout never need a no-variant branch.
+model ProductVariant {
+  id                String   @id @default(cuid())
+  productId         String
+  product           Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  name              String   // Display label, e.g. "256GB / Graphite"
+  sku               String?  @unique
+  price             Decimal  @db.Decimal(10, 2)
+  comparePrice      Decimal? @db.Decimal(10, 2)
+  stock             Int      @default(0)
+  lowStockThreshold Int      @default(5)
+  isPreorder        Boolean  @default(false) // Preorder is per-variant: you can preorder 1TB while 256GB ships
+
+  imageId           String?  // Optional variant-specific image
+  isDefault         Boolean  @default(false)
+  active            Boolean  @default(true)
+  sortOrder         Int      @default(0)
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  options           ProductVariantOption[]
+  cartItems         CartItem[]
+  orderItems        OrderItem[]
+
+  @@index([productId, active])
+  @@index([productId, price])
+  @@map("product_variants")
+}
+
+// A variant axis for one product, e.g. "Storage" or "Colour".
+model ProductOption {
+  id        String               @id @default(cuid())
+  productId String
+  product   Product              @relation(fields: [productId], references: [id], onDelete: Cascade)
+  name      String
+  sortOrder Int                  @default(0)
+  values    ProductOptionValue[]
+
+  @@unique([productId, name])
+  @@index([productId])
+  @@map("product_options")
+}
+
+// A selectable value on an axis, e.g. "256GB" or "Graphite".
+model ProductOptionValue {
+  id        String                @id @default(cuid())
+  optionId  String
+  option    ProductOption         @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  value     String
+  hexColor  String?               // Optional swatch colour for colour axes
+  sortOrder Int                   @default(0)
+  variants  ProductVariantOption[]
+
+  @@unique([optionId, value])
+  @@index([optionId])
+  @@map("product_option_values")
+}
+
+// Join: which option values make up a given variant.
+model ProductVariantOption {
+  id            String             @id @default(cuid())
+  variantId     String
+  variant       ProductVariant     @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  optionValueId String
+  optionValue   ProductOptionValue @relation(fields: [optionValueId], references: [id], onDelete: Cascade)
+
+  @@unique([variantId, optionValueId])
+  @@index([variantId])
+  @@index([optionValueId])
+  @@map("product_variant_options")
+}
+
+// Dynamic product specifications (key-value pairs)
+// Examples: { key: "Screen Size", value: "6.7 inches" }, { key: "RAM", value: "8GB" }
+model ProductSpecification {
+  id        String   @id @default(cuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  key       String   // e.g., "Color", "Size", "Weight", "RAM", "Storage"
+  value     String   // e.g., "Black", "XL", "150g", "8GB", "256GB"
+  group     String?  // Optional grouping: "Display", "Performance", "Physical"
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@unique([productId, key]) // Each product can only have one value per key
+  @@index([productId])
+  @@index([key])
+  @@map("product_specifications")
+}
+
+// Specification templates for predefined product attributes
+model SpecificationTemplate {
+  id        String   @id @default(cuid())
+  key       String   @unique // e.g., "screen_size", "ram", "storage"
+  label     String   // Display name: "Screen Size", "RAM", "Storage"
+  group     String   @default("General") // Grouping: "Display", "Performance", "Physical"
+  type      String   @default("text") // "text", "number", "select"
+  options   String[] // For select type: ["Small", "Medium", "Large"]
+  required  Boolean  @default(false)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([group])
+  @@map("specification_templates")
+}
+
+// Join table for Product <-> Category many-to-many relationship
+model ProductCategory {
+  id         String   @id @default(cuid())
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  sortOrder  Int      @default(0) // Order of category for this product
+  createdAt  DateTime @default(now())
+
+  @@unique([productId, categoryId])
+  @@index([productId])
+  @@index([categoryId])
+  @@map("product_categories")
+}
+
+model ProductImage {
+  id        String   @id @default(cuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  url       String
+  publicId  String   // Cloudinary public ID
+  alt       String?
+  sortOrder Int      @default(0)
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([productId])
+  @@map("product_images")
+}
+
+// Delivery zones/periods for products (location-based delivery estimates)
+model ProductDeliveryZone {
+  id              String   @id @default(cuid())
+  productId       String
+  product         Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  // Zone identification
+  zoneName        String   // e.g., "Accra", "Kumasi", "National", "International"
+  zoneType        String   @default("city") // "city", "region", "country", "international"
+  region          String?  // For regional grouping
+
+  // Delivery time estimates
+  minDays         Int      // Minimum delivery days
+  maxDays         Int      // Maximum delivery days
+
+  // Additional info
+  deliveryFee     Decimal? @db.Decimal(10, 2) // Zone-specific delivery fee (optional)
+  available       Boolean  @default(true)     // Can deliver to this zone
+  notes           String?                     // Additional delivery notes
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([productId, zoneName])
+  @@index([productId])
+  @@index([zoneName])
+  @@index([zoneType])
+  @@map("product_delivery_zones")
+}
+
+// ============================================
+// CART (Persistent Guest Cart with UUID)
+// Persists indefinitely until user clears it
+// ============================================
+
+model Cart {
+  id         String     @id @default(uuid()) // UUID for guest cart identification
+  cartId     String     @unique @default(uuid()) // Public UUID exposed to client
+
+  // Optional customer link (null for guest carts)
+  customerId String?
+  customer   Customer?  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  items      CartItem[]
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  // Note: No expiration - cart persists indefinitely until user clears it
+  // Cart cleanup can be done via admin action or scheduled job for abandoned carts
+
+  @@index([cartId])
+  @@index([customerId])
+  @@map("carts")
+}
+
+model CartItem {
+  id            String         @id @default(cuid())
+  cartId        String
+  cart          Cart           @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  productId     String
+  product       Product        @relation(fields: [productId], references: [id])
+  // The specific sellable unit. Stock and price are read from here, not from
+  // Product — leaving them on Product while stock lives on variants would
+  // silently oversell.
+  variantId     String
+  variant       ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  quantity      Int            @default(1)
+
+  // Snapshot price at time of adding to cart
+  snapshotPrice Decimal        @db.Decimal(10, 2)
+  snapshotName  String         // Product name snapshot
+  snapshotVariantName String?  // e.g. "256GB / Graphite"
+  currency      String         @default("GHS")
+
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  // Keyed on the variant, not the product, so "256GB" and "512GB" of the same
+  // phone are separate lines. A variant belongs to exactly one product, so the
+  // 2-tuple is sufficient.
+  @@unique([cartId, variantId])
+  @@index([cartId])
+  @@index([variantId])
+  @@map("cart_items")
+}
+
+// ============================================
+// ORDERS
+// ============================================
+
+model Order {
+  id              String         @id @default(cuid())
+  orderNumber     String         @unique // Human-readable order number (e.g., ORD-20241201-001)
+
+  // Optional customer link (null for guest orders)
+  customerId      String?
+  customer        Customer?      @relation(fields: [customerId], references: [id])
+
+  // Customer information (embedded for historical record and guest orders)
+  customerPhone   String
+  customerEmail   String?
+  customerName    String
+  customerAddress String
+  customerCity    String
+  customerRegion  String?
+  deliveryNotes   String?        // Special delivery instructions
+
+  // Order items snapshot as JSON (kept for backward compatibility)
+  // Stores: [{ productId, name, price, quantity, imageUrl }]
+  itemsSnapshot   Json
+
+  // Payment details
+  paymentMethod   PaymentMethod
+  paymentStatus   PaymentStatus  @default(PENDING)
+
+  // Delivery details
+  deliveryStatus  DeliveryStatus @default(PENDING)
+
+  // Financial breakdown
+  subtotal        Decimal        @db.Decimal(10, 2)
+  deliveryFee     Decimal        @db.Decimal(10, 2) @default(0)
+  discount        Decimal        @db.Decimal(10, 2) @default(0)
+  total           Decimal        @db.Decimal(10, 2)
+  currency        String         @default("GHS")
+
+  // PDF Document URLs (stored in Cloudinary/S3)
+  invoiceUrl      String?        // Generated PDF invoice URL
+  deliveryNoteUrl String?        // Generated PDF delivery note URL
+
+  notes           String?        // Internal order notes
+
+  // Multi-supplier tracking
+  supplierCount   Int            @default(1) // Number of suppliers in this order
+
+  // Relations
+  payment         Payment?
+  delivery        Delivery?
+  items           OrderItem[]    // Individual order items linked to suppliers
+
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([orderNumber])
+  @@index([customerId])
+  @@index([customerPhone])
+  @@index([customerEmail])
+  @@index([paymentStatus])
+  @@index([deliveryStatus])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+model Payment {
+  id                  String              @id @default(cuid())
+  orderId             String              @unique
+  order               Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  method              PaymentMethod
+  provider            MobileMoneyProvider?
+  transactionId       String?             @unique // External transaction ID from payment provider
+  providerReference   String?             // Provider's reference number
+  amount              Decimal             @db.Decimal(10, 2)
+  currency            String              @default("GHS")
+  status              PaymentStatus       @default(PENDING)
+  phoneNumber         String?             // Mobile money phone number used
+  paidAt              DateTime?
+  failedAt            DateTime?
+  failedReason        String?
+  webhookPayload      Json?               // Store webhook data for debugging/audit
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  @@index([transactionId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("payments")
+}
+
+// ============================================
+// DELIVERY & COURIERS
+// ============================================
+
+model Courier {
+  id         String     @id @default(cuid())
+  name       String
+  phone      String
+  email      String?
+  active     Boolean    @default(true)
+  deliveries Delivery[]
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  @@map("couriers")
+}
+
+model Delivery {
+  id              String         @id @default(cuid())
+  orderId         String         @unique
+  order           Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  courierId       String?
+  courier         Courier?       @relation(fields: [courierId], references: [id])
+  status          DeliveryStatus @default(PENDING)
+  trackingNumber  String?        @unique
+  estimatedDate   DateTime?
+  assignedAt      DateTime?
+  pickedUpAt      DateTime?
+  inTransitAt     DateTime?
+  deliveredAt     DateTime?
+  deliveryProof   String?        // Photo URL of delivered package
+  signature       String?        // Base64 signature on delivery
+  notes           String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([status])
+  @@index([courierId])
+  @@index([trackingNumber])
+  @@map("deliveries")
+}
+
+// ============================================
+// ORDER ITEMS (Multi-supplier)
+// ============================================
+
+model OrderItem {
+  id                String            @id @default(cuid())
+  orderId           String
+  productId         String
+  // Nullable so historical rows created before variants remain valid; new
+  // orders always carry one. OrderItem snapshots everything it displays, so
+  // deleting a variant never corrupts order history.
+  variantId         String?
+  supplierId        String?
+
+  // Snapshot at order time
+  productName       String
+  variantName       String?
+  productSku        String?
+  productImage      String?
+  unitPrice         Decimal           @db.Decimal(10, 2)
+  quantity          Int
+  totalPrice        Decimal           @db.Decimal(10, 2)
+  currency          String            @default("GHS")
+
+  // Commission tracking
+  commissionRate    Decimal           @db.Decimal(5, 2) @default(0)
+  commissionAmount  Decimal           @db.Decimal(10, 2) @default(0)
+
+  // Supplier-specific fulfillment
+  fulfillmentStatus FulfillmentStatus @default(PENDING)
+  fulfilledAt       DateTime?
+  shippedAt         DateTime?
+  deliveredAt       DateTime?
+  trackingNumber    String?
+  notes             String?
+
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  order             Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product           Product           @relation(fields: [productId], references: [id])
+  // SetNull rather than Cascade: deleting a variant must never delete order
+  // history. The snapshot columns keep the line readable without it.
+  variant           ProductVariant?   @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  supplier          Supplier?         @relation(fields: [supplierId], references: [id])
+
+  @@index([orderId])
+  @@index([supplierId])
+  @@index([variantId])
+  @@index([fulfillmentStatus])
+  @@index([supplierId, fulfillmentStatus])
+  @@map("order_items")
+}
+
+// ============================================
+// SUPPLIER PAYOUTS
+// ============================================
+
+model SupplierPayout {
+  id                String       @id @default(cuid())
+  supplierId        String
+
+  // Period
+  periodStart       DateTime
+  periodEnd         DateTime
+
+  // Amounts
+  grossAmount       Decimal      @db.Decimal(12, 2) // Total sales
+  commissionAmount  Decimal      @db.Decimal(12, 2) // Platform commission
+  netAmount         Decimal      @db.Decimal(12, 2) // Amount to pay supplier
+  currency          String       @default("GHS")
+
+  // Status
+  status            PayoutStatus @default(PENDING)
+
+  // Payment Details
+  paymentMethod     String?      // BANK_TRANSFER, MOMO
+  paymentReference  String?
+  paidAt            DateTime?
+
+  // Metadata
+  orderItemIds      String[]     // Order items included in this payout
+  itemCount         Int          @default(0) // Number of items in payout
+  notes             String?
+
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  supplier          Supplier     @relation(fields: [supplierId], references: [id])
+
+  @@index([supplierId])
+  @@index([status])
+  @@index([periodStart, periodEnd])
+  @@map("supplier_payouts")
+}
+
+// ============================================
+// REPORTING MODELS
+// ============================================
+
+// Generated reports (stored as files)
+model Report {
+  id          String       @id @default(cuid())
+  name        String
+  type        ReportType
+  status      ReportStatus @default(PENDING)
+
+  // Report parameters (date range, filters, etc.)
+  parameters  Json?
+
+  // Generated file URL
+  fileUrl     String?
+  fileSize    Int?         // Size in bytes
+
+  // Metadata
+  generatedBy String?      // Admin ID who requested the report
+  admin       Admin?       @relation(fields: [generatedBy], references: [id])
+  error       String?      // Error message if generation failed
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([type, status])
+  @@index([createdAt])
+  @@map("reports")
+}
+
+// Daily aggregated sales data for quick reporting
+model DailySalesReport {
+  id              String   @id @default(cuid())
+  date            DateTime @db.Date @unique
+
+  // Order metrics
+  totalOrders     Int      @default(0)
+  completedOrders Int      @default(0)
+  cancelledOrders Int      @default(0)
+  pendingOrders   Int      @default(0)
+
+  // Financial metrics
+  grossSales      Decimal  @db.Decimal(12, 2) @default(0)
+  totalDiscount   Decimal  @db.Decimal(12, 2) @default(0)
+  totalDeliveryFees Decimal @db.Decimal(12, 2) @default(0)
+  netSales        Decimal  @db.Decimal(12, 2) @default(0)
+
+  // Payment method breakdown
+  momoPayments    Int      @default(0)
+  momoAmount      Decimal  @db.Decimal(12, 2) @default(0)
+  codPayments     Int      @default(0)
+  codAmount       Decimal  @db.Decimal(12, 2) @default(0)
+
+  // Product metrics
+  itemsSold       Int      @default(0)
+  uniqueProducts  Int      @default(0)
+
+  currency        String   @default("GHS")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([date])
+  @@map("daily_sales_reports")
+}
+
+// Inventory change log for tracking stock movements
+model InventoryLog {
+  id            String   @id @default(cuid())
+  productId     String
+  productName   String   // Snapshot for historical reference
+
+  previousStock Int
+  newStock      Int
+  change        Int      // Positive for additions, negative for deductions
+
+  reason        String   // SALE, RESTOCK, ADJUSTMENT, RETURN, etc.
+  referenceId   String?  // Order ID or other reference
+  referenceType String?  // ORDER, MANUAL, RETURN, etc.
+
+  notes         String?
+  performedBy   String?  // Admin ID if manual adjustment
+
+  createdAt     DateTime @default(now())
+
+  @@index([productId])
+  @@index([reason])
+  @@index([createdAt])
+  @@map("inventory_logs")
+}
+
+// Audit log for tracking admin actions
+model AuditLog {
+  id          String   @id @default(cuid())
+  adminId     String?
+  admin       Admin?   @relation(fields: [adminId], references: [id])
+  action      String   // CREATE, UPDATE, DELETE, LOGIN, etc.
+  entity      String   // Product, Order, Category, etc.
+  entityId    String?
+
+  // Store old and new values for changes
+  oldValues   Json?
+  newValues   Json?
+
+  ipAddress   String?
+  userAgent   String?
+
+  createdAt   DateTime @default(now())
+
+  @@index([adminId])
+  @@index([action])
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ============================================
+// APPLICATION SETTINGS
+// ============================================
+
+model Setting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @updatedAt
+
+  @@map("settings")
+}
+
+// ============================================
+// NOTIFICATIONS LOG
+// ============================================
+
+model NotificationLog {
+  id          String   @id @default(cuid())
+  type        String   // SMS, EMAIL, WHATSAPP
+  recipient   String
+  subject     String?
+  message     String
+  status      String   // SENT, FAILED, PENDING
+  error       String?
+  orderId     String?  // Related order if applicable
+  metadata    Json?
+  sentAt      DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([type, status])
+  @@index([orderId])
+  @@index([createdAt])
+  @@map("notification_logs")
+}

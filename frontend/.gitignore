@@ -1,0 +1,26 @@
+# Dependencies
+node_modules
+
+# Next.js build output
+.next
+out
+*.tsbuildinfo
+
+# Environment — use .env.example as the template
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test
+coverage
+
+# Deployment
+.vercel
+
+# OS
+.DS_Store
+Thumbs.db

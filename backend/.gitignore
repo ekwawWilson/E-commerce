@@ -1,0 +1,29 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+*.tsbuildinfo
+
+# Environment — never commit real credentials; use .env.example as the template
+.env
+.env.local
+.env.*.local
+# Ad-hoc copies of .env (e.g. "env copy" from a file manager)
+env copy*
+*.env.bak
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test
+coverage
+*.lcov
+
+# Uploads (local development)
+uploads
+
+# OS
+.DS_Store
+Thumbs.db

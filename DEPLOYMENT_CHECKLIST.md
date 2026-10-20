@@ -1,0 +1,213 @@
+# Deployment Checklist - E-Commerce App
+
+## ✅ Issues Fixed
+
+### 1. Backend Build & Module Resolution ✅
+- **Problem**: ES module syntax errors on Render
+- **Fix**: Changed TypeScript config from ESNext to CommonJS
+- **Files Changed**: `backend/tsconfig.json`
+- **Status**: ✅ Backend builds and runs successfully
+
+### 2. Supabase Storage Configuration ✅
+- **Problem**: Wrong Supabase project URL in config
+- **Fix**: Updated to correct project (`mdywzxpacqwuedrjbhse`)
+- **Files Changed**:
+  - `backend/.env` - Updated SUPABASE_URL
+  - Note: Still need to add correct SERVICE_ROLE_KEY
+- **Status**: ✅ Storage URL works, bucket is accessible
+
+### 3. Next.js Image Optimization ✅
+- **Problem**: Wrong Supabase hostname in Next.js config
+- **Fix**: Updated from `mjeytynpoecqeypaiojt` to `mdywzxpacqwuedrjbhse`
+- **Files Changed**: `frontend/next.config.js`
+- **Status**: ✅ Image optimization now allows correct domain
+
+## 🚀 Deployment Steps
+
+### Backend (Render)
+
+1. **Environment Variables** - Set these in Render dashboard:
+   ```bash
+   NODE_ENV=production
+   PORT=4000
+
+   # Database
+   DATABASE_URL=postgresql://postgres.<supabase-project-ref>:<db-password>@aws-1-eu-north-1.pooler.supabase.com:6543/postgres?pgbouncer=true
+   DIRECT_URL=postgresql://postgres.<supabase-project-ref>:<db-password>@aws-1-eu-north-1.pooler.supabase.com:5432/postgres
+
+   # JWT - IMPORTANT: Generate a strong secret (openssl rand -base64 48).
+   # The server refuses to start in production if this is missing, shorter
+   # than 32 characters, or one of the template placeholders.
+   JWT_SECRET=<generate-strong-random-string>
+   JWT_EXPIRES_IN=7d
+
+   # CORS - Set to your Vercel domain
+   CORS_ORIGIN=https://your-app.vercel.app
+
+   # Frontend URL
+   FRONTEND_URL=https://your-app.vercel.app
+
+   # Supabase Storage
+   SUPABASE_URL=https://mdywzxpacqwuedrjbhse.supabase.co
+   SUPABASE_SERVICE_KEY=<get-from-supabase-dashboard>
+   SUPABASE_STORAGE_BUCKET=images
+
+   # Company Info
+   COMPANY_NAME=YourStoreName
+   COMPANY_ADDRESS=Your Address
+   COMPANY_PHONE=+233 XX XXX XXXX
+
+   # Currency
+   DEFAULT_CURRENCY=GHS
+   CURRENCY_SYMBOL=GH₵
+
+   # MTN Mobile Money - REQUIRED for MoMo checkout in production.
+   # Production always calls the real MTN API (MOMO_SIMULATE is refused), so
+   # without these credentials MoMo payments fail and only COD works.
+   MOMO_BASE_URL=https://proxy.momoapi.mtn.com
+   MOMO_ENVIRONMENT=mtnghana
+   MOMO_SUBSCRIPTION_KEY=<from-mtn-momo-portal>
+   MOMO_API_USER=<from-mtn-momo-portal>
+   MOMO_API_KEY=<from-mtn-momo-portal>
+   MOMO_CALLBACK_URL=https://your-backend.onrender.com/api/payments/webhook
+
+   # Redis - optional; without it no email/SMS/WhatsApp/PDF jobs run
+   # REDIS_URL=redis://default:<password>@<host>:6379
+
+   # Email (if using)
+   SMTP_HOST=your-smtp-host
+   SMTP_PORT=587
+   SMTP_USER=your-email
+   SMTP_PASS=your-password
+   EMAIL_FROM=noreply@yourdomain.com
+   ```
+
+2. **Build Command**: `npm run build`
+3. **Start Command**: `npm start`
+4. **Deploy**: Push to your connected Git repo
+
+### Frontend (Vercel)
+
+1. **Environment Variables** - Set in Vercel dashboard:
+   ```bash
+   # API URL - Your Render backend URL
+   NEXT_PUBLIC_API_URL=https://your-backend.onrender.com/api
+
+   # Site URL - Your Vercel domain
+   NEXT_PUBLIC_SITE_URL=https://your-app.vercel.app
+
+   # Site Info
+   NEXT_PUBLIC_SITE_NAME=YourStoreName
+   NEXT_PUBLIC_SITE_DESCRIPTION=Your store description
+
+   # Contact
+   NEXT_PUBLIC_CONTACT_PHONE=+233XXXXXXXXX
+   NEXT_PUBLIC_CONTACT_EMAIL=contact@yourdomain.com
+   NEXT_PUBLIC_CONTACT_WHATSAPP=+233XXXXXXXXX
+
+   # Currency
+   NEXT_PUBLIC_CURRENCY=GHS
+   NEXT_PUBLIC_CURRENCY_SYMBOL=GH₵
+
+   # Social Media (optional)
+   NEXT_PUBLIC_FACEBOOK_URL=https://facebook.com/yourpage
+   NEXT_PUBLIC_INSTAGRAM_URL=https://instagram.com/yourpage
+   NEXT_PUBLIC_TWITTER_URL=https://twitter.com/yourpage
+   ```
+
+2. **Build Settings**:
+   - Framework Preset: Next.js
+   - Build Command: `npm run build`
+   - Output Directory: `.next`
+
+3. **Deploy**: Connect your Git repo and deploy
+
+## 📝 Post-Deployment Tasks
+
+### 1. Get Supabase Service Role Key
+- Go to: https://supabase.com/dashboard/project/mdywzxpacqwuedrjbhse/settings/api
+- Copy the **service_role** key
+- Update in Render environment variables
+- Redeploy backend
+
+### 2. Verify Supabase Storage
+- Go to: https://supabase.com/dashboard/project/mdywzxpacqwuedrjbhse/storage/buckets
+- Ensure `images` bucket exists and is PUBLIC
+- Verify storage policies are set (see setup-supabase-storage.md)
+
+### 3. Update CORS in Backend
+After deploying frontend to Vercel:
+- Update `CORS_ORIGIN` in Render to your Vercel URL
+- Redeploy backend
+
+### 4. Test Everything
+- [ ] Backend health check: `https://your-backend.onrender.com/api/health`
+- [ ] Frontend loads: `https://your-app.vercel.app`
+- [ ] Products display with images
+- [ ] Can add products to cart
+- [ ] Admin login works: `https://your-app.vercel.app/admin`
+
+## 🔐 Security Checklist
+
+- [ ] Generate strong JWT_SECRET (not the default)
+- [ ] Remove any hardcoded passwords from .env files
+- [ ] Set NODE_ENV=production in Render
+- [ ] Enable HTTPS only (both platforms do this by default)
+- [ ] Set appropriate CORS_ORIGIN (not *)
+- [ ] Review Supabase storage policies
+
+## 📊 Monitoring
+
+### Backend (Render)
+- Logs: https://dashboard.render.com/
+- Check for startup errors
+- Monitor response times
+
+### Frontend (Vercel)
+- Logs: https://vercel.com/dashboard
+- Check for build errors
+- Monitor image optimization
+
+### Database (Supabase)
+- Dashboard: https://supabase.com/dashboard/project/mdywzxpacqwuedrjbhse
+- Monitor queries
+- Check storage usage
+
+## 🐛 Troubleshooting
+
+### Images not loading (400 error)
+- Check Next.js config has correct Supabase hostname
+- Verify images bucket is PUBLIC
+- Check storage policies are set
+
+### Backend 502/503 errors
+- Check Render logs for startup errors
+- Verify DATABASE_URL is correct
+- Ensure all required env vars are set
+
+### CORS errors
+- Update CORS_ORIGIN in backend to match frontend URL
+- Ensure both HTTP and HTTPS are configured if needed
+
+### Admin login fails
+- Verify JWT_SECRET is set
+- Check database connection
+- Ensure admin users exist (run seed script)
+
+## 📞 Support Resources
+
+- Render Docs: https://render.com/docs
+- Vercel Docs: https://vercel.com/docs
+- Supabase Docs: https://supabase.com/docs
+- Next.js Docs: https://nextjs.org/docs
+
+## 🎉 Success Criteria
+
+Your deployment is successful when:
+- ✅ Backend responds to health checks
+- ✅ Frontend loads without errors
+- ✅ Products display with images
+- ✅ Cart functionality works
+- ✅ Admin panel is accessible
+- ✅ Orders can be created
+- ✅ Images upload successfully
