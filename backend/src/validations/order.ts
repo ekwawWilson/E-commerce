@@ -10,15 +10,17 @@ export const orderListQuerySchema = paginationSchema.extend({
   ...dateRangeSchema.shape,
 });
 
-// Order tracking schema
+// Order tracking schema. Both the order number and the phone/email it was
+// placed with are required, so order details can't be looked up by guessing.
 export const orderTrackingSchema = z.object({
-  orderNumber: z.string().optional(),
-  phone: z.string().optional(),
-  email: z.string().email().optional(),
+  orderNumber: z.string().trim().min(1, 'Order number is required'),
+  phone: z.string().trim().min(9).optional(),
+  email: z.string().trim().email().optional(),
 }).refine(
-  (data) => data.orderNumber || data.phone || data.email,
+  (data) => data.phone || data.email,
   {
-    message: 'At least one of orderNumber, phone, or email is required',
+    message: 'Enter the phone number or email used for the order',
+    path: ['phone'],
   }
 );
 
@@ -54,5 +56,11 @@ export const adminUpdateDeliveryStatusSchema = z.object({
 
 // Cancel order schema
 export const cancelOrderSchema = z.object({
-  reason: z.string().min(1, 'Cancellation reason is required').max(500),
+  reason: z.string().trim().min(1, 'Cancellation reason is required').max(500),
+});
+
+// Record a refund for a cancelled, paid order (admin)
+export const recordRefundSchema = z.object({
+  reason: z.string().trim().min(1, 'Refund reason is required').max(500),
+  reference: z.string().trim().max(200).optional(),
 });

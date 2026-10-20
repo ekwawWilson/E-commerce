@@ -45,6 +45,17 @@ async function getHeaders(): Promise<Record<string, string>> {
     headers['X-Cart-Id'] = cartId;
   }
 
+  // Signed-in customers send their token so orders are linked to the account.
+  // Same key the customer store writes; read directly to avoid an import cycle.
+  try {
+    const token = await AsyncStorage.getItem('customer_auth_token');
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+  } catch {
+    // No token available; continue as a guest
+  }
+
   return headers;
 }
 
@@ -239,14 +250,15 @@ export const api = {
   },
 
   // Orders
-  async checkout(data: CheckoutData): Promise<ApiResponse<{ order: Order; orderNumber: string }>> {
+  // The API returns the created order itself as `data`
+  async checkout(data: CheckoutData): Promise<ApiResponse<Order>> {
     const response = await fetch(`${API_BASE_URL}/orders/checkout`, {
       method: 'POST',
       headers: await getHeaders(),
       body: JSON.stringify(data),
     });
 
-    const result = await handleResponse<{ order: Order; orderNumber: string }>(response);
+    const result = await handleResponse<Order>(response);
 
     // Clear cart after successful checkout
     if (result.success) {
@@ -256,13 +268,16 @@ export const api = {
     return result;
   },
 
-  async trackOrder(orderNumber: string): Promise<ApiResponse<Order>> {
-    const response = await fetch(`${API_BASE_URL}/orders/track/${orderNumber}`);
+  // Tracking needs the order number plus the phone or email it was placed with
+  async trackOrder(orderNumber: string, contact: string): Promise<ApiResponse<Order>> {
+    const params = new URLSearchParams({ orderNumber });
+    params.set(contact.includes('@') ? 'email' : 'phone', contact);
+    const response = await fetch(`${API_BASE_URL}/orders/track?${params.toString()}`);
     return handleResponse(response);
   },
 
   // Payments
-  async initiatePayment(orderId: string, phoneNumber: string): Promise<ApiResponse<{ paymentId: string }>> {
+  async initiatePayment(orderId: string, phoneNumber: string): Promise<ApiResponse<{ transactionId: string }>> {
     const response = await fetch(`${API_BASE_URL}/payments/initiate`, {
       method: 'POST',
       headers: await getHeaders(),
@@ -271,8 +286,8 @@ export const api = {
     return handleResponse(response);
   },
 
-  async checkPaymentStatus(paymentId: string): Promise<ApiResponse<{ status: string; paymentStatus: string }>> {
-    const response = await fetch(`${API_BASE_URL}/payments/${paymentId}/status`);
+  async verifyPayment(transactionId: string): Promise<ApiResponse<{ status: string }>> {
+    const response = await fetch(`${API_BASE_URL}/payments/verify/${encodeURIComponent(transactionId)}`);
     return handleResponse(response);
   },
 };

@@ -1,16 +1,30 @@
 import { Router } from 'express';
 import { supplierAuthController } from './supplier-auth.controller';
 import { authenticateSupplier, requireActiveSupplier, requireSupplierRole } from './supplier-auth.middleware';
+import { validate } from '../../middleware/validate';
+import { authLimiter, registrationLimiter } from '../../middleware/rateLimit';
+import {
+  supplierRegisterSchema,
+  supplierLoginSchema,
+  supplierChangePasswordSchema,
+  supplierStaffSchema,
+} from '../../validations';
 
 const router = Router();
 
 // Public routes
-router.post('/register', supplierAuthController.register);
-router.post('/login', supplierAuthController.login);
+router.post('/register', registrationLimiter, validate(supplierRegisterSchema, 'body'), supplierAuthController.register);
+router.post('/login', authLimiter, validate(supplierLoginSchema, 'body'), supplierAuthController.login);
 
 // Protected routes
 router.get('/me', authenticateSupplier, supplierAuthController.getMe);
-router.post('/change-password', authenticateSupplier, supplierAuthController.changePassword);
+router.post(
+  '/change-password',
+  authLimiter,
+  authenticateSupplier,
+  validate(supplierChangePasswordSchema, 'body'),
+  supplierAuthController.changePassword
+);
 
 // Staff management (requires OWNER or MANAGER role)
 router.get(
@@ -25,6 +39,7 @@ router.post(
   authenticateSupplier,
   requireActiveSupplier,
   requireSupplierRole('OWNER', 'MANAGER'),
+  validate(supplierStaffSchema, 'body'),
   supplierAuthController.createStaff
 );
 router.patch(

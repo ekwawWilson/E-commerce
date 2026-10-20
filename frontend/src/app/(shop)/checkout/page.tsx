@@ -14,6 +14,8 @@ import {
   User,
   Check,
   Plus,
+  Tag,
+  X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -27,7 +29,8 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { useCartStore } from '@/stores/cart';
 import { useCustomerStore } from '@/stores/customer';
-import { api } from '@/lib/api';
+import { api, CheckoutQuote } from '@/lib/api';
+import { saveCheckoutContact } from '@/lib/checkout-contact';
 import { formatPrice } from '@/lib/utils';
 import { PaymentMethod } from '@/types';
 import { useStoreSettings } from '@/components/providers/store-settings-provider';
@@ -66,12 +69,17 @@ interface CustomerAddress {
 
 export default function CheckoutPage() {
   const router = useRouter();
-  const { items, subtotal, itemCount } = useCartStore();
+  const { items, subtotal, itemCount, fetchCart } = useCartStore();
   const { customer, isAuthenticated, loadAuth } = useCustomerStore();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
   const [useNewAddress, setUseNewAddress] = useState(false);
+  const [couponInput, setCouponInput] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState<string | null>(null);
+  const [couponError, setCouponError] = useState<string | null>(null);
+  const [isApplyingCoupon, setIsApplyingCoupon] = useState(false);
+  const [quote, setQuote] = useState<CheckoutQuote | null>(null);
 
   const savedAddresses: CustomerAddress[] = customer?.addresses || [];
   const defaultAddress = savedAddresses.find((a) => a.isDefault);
@@ -121,19 +129,70 @@ export default function CheckoutPage() {
   }, [isAuthenticated, customer, setValue, defaultAddress, savedAddresses, useNewAddress]);
 
   const paymentMethod = watch('paymentMethod');
-  // Delivery pricing comes from admin store settings; these were hardcoded
-  // XAF magnitudes (1000 fee / 50000 threshold) that disagreed with what the
-  // backend actually charged.
-  const { deliveryFee: settingsFee, freeDeliveryThreshold } = useStoreSettings();
-  const deliveryFee =
-    freeDeliveryThreshold !== undefined && subtotal >= freeDeliveryThreshold
-      ? 0
-      : settingsFee ?? 0;
-  const total = subtotal + deliveryFee;
+  const watchedCity = watch('city');
+  const watchedRegion = watch('region');
 
   const getSelectedAddress = (): CustomerAddress | undefined => {
     if (!selectedAddressId) return undefined;
     return savedAddresses.find((a) => a.id === selectedAddressId);
+  };
+
+  const usingSavedAddress = !!(isAuthenticated && selectedAddressId && !useNewAddress && getSelectedAddress());
+  const destinationCity = (usingSavedAddress ? getSelectedAddress()?.city : watchedCity)?.trim() || '';
+  const destinationRegion = (usingSavedAddress ? getSelectedAddress()?.region : watchedRegion)?.trim() || undefined;
+
+  // The server prices the order (delivery zones, coupon). Until it has a city
+  // to price against, show the store's default fee as an estimate.
+  const { deliveryFee: settingsFee, freeDeliveryThreshold } = useStoreSettings();
+  const estimatedFee =
+    freeDeliveryThreshold !== undefined && subtotal >= freeDeliveryThreshold ? 0 : settingsFee ?? 0;
+
+  useEffect(() => {
+    if (!destinationCity || items.length === 0) {
+      setQuote(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      api
+        .quote({ city: destinationCity, region: destinationRegion, couponCode: appliedCoupon || undefined })
+        .then((response) => {
+          if (!cancelled) setQuote(response.data);
+        })
+        .catch((err: any) => {
+          if (cancelled) return;
+          setQuote(null);
+          // A coupon that stopped qualifying (e.g. cart changed) is dropped
+          if (appliedCoupon) {
+            setAppliedCoupon(null);
+            setCouponError(err.message || 'This coupon can no longer be used');
+          }
+        });
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [destinationCity, destinationRegion, appliedCoupon, subtotal, items.length]);
+
+  const discount = quote?.discount ?? 0;
+  const deliveryFee = quote ? quote.deliveryFee : estimatedFee;
+  const total = quote ? quote.total : subtotal + estimatedFee;
+
+  const handleApplyCoupon = async () => {
+    const code = couponInput.trim();
+    if (!code) return;
+    setIsApplyingCoupon(true);
+    setCouponError(null);
+    try {
+      const response = await api.previewCoupon(code);
+      setAppliedCoupon(response.data.code);
+      setCouponInput('');
+    } catch (err: any) {
+      setCouponError(err.message || 'This coupon is not valid');
+    } finally {
+      setIsApplyingCoupon(false);
+    }
   };
 
   const onSubmit = async (data: CheckoutFormData) => {
@@ -147,8 +206,6 @@ export default function CheckoutPage() {
 
     try {
       const selectedAddress = getSelectedAddress();
-      const usingSavedAddress =
-        isAuthenticated && selectedAddressId && !useNewAddress && selectedAddress;
 
       if (!usingSavedAddress && !(data.city || '').trim()) {
         setError('City is required');
@@ -156,7 +213,7 @@ export default function CheckoutPage() {
         return;
       }
 
-      const checkoutData = usingSavedAddress
+      const checkoutData = usingSavedAddress && selectedAddress
         ? {
             customerName: selectedAddress.name,
             customerPhone: selectedAddress.phone,
@@ -178,20 +235,33 @@ export default function CheckoutPage() {
             paymentMethod: data.paymentMethod as PaymentMethod,
           };
 
-      const response = await api.checkout(checkoutData);
+      const response = await api.checkout({
+        ...checkoutData,
+        // Required by the API for MoMo; the payment page lets them use another number
+        momoPhoneNumber: checkoutData.paymentMethod === 'MOMO' ? checkoutData.customerPhone : undefined,
+        couponCode: appliedCoupon || undefined,
+      });
 
-      if (response.success && response.data?.order) {
-        const order = response.data.order;
+      // The API returns the order itself as `data`
+      const order = response.success ? response.data : null;
+      if (order?.id) {
+        saveCheckoutContact(order.id, {
+          customerName: checkoutData.customerName,
+          customerPhone: checkoutData.customerPhone,
+          customerEmail: checkoutData.customerEmail,
+          deliveryAddress: [checkoutData.address, checkoutData.city, checkoutData.region].filter(Boolean).join(', '),
+          deliveryNotes: checkoutData.deliveryNotes,
+        });
 
-        // If MOMO payment, redirect to payment page
-        if (data.paymentMethod === 'MOMO') {
-          router.push(`/orders/${order.id}/payment`);
-        } else {
-          // COD - redirect to confirmation page
-          router.push(`/orders/${order.orderNumber}/confirmation`);
-        }
+        router.push(
+          data.paymentMethod === 'MOMO' ? `/orders/${order.id}/payment` : `/orders/${order.id}/confirmation`
+        );
       }
     } catch (err: any) {
+      // 409 = prices changed or stock ran out; reload the cart so totals are current
+      if (err?.status === 409) {
+        await fetchCart();
+      }
       setError(err.message || 'Failed to place order. Please try again.');
     } finally {
       setIsSubmitting(false);
@@ -368,7 +438,7 @@ export default function CheckoutPage() {
                         <Label htmlFor="customerPhone">Phone Number *</Label>
                         <Input
                           id="customerPhone"
-                          placeholder="+237 6XX XXX XXX"
+                          placeholder="024 XXX XXXX"
                           {...register('customerPhone')}
                         />
                         {errors.customerPhone && (
@@ -481,7 +551,8 @@ export default function CheckoutPage() {
                           Mobile Money (MoMo)
                         </Label>
                         <p className="text-sm text-muted-foreground">
-                          Pay instantly with MTN Mobile Money
+                          Pay instantly with MTN Mobile Money (Telecel Cash and
+                          AirtelTigo Money are coming soon)
                         </p>
                       </div>
                     </div>
@@ -555,6 +626,51 @@ export default function CheckoutPage() {
 
                 <Separator />
 
+                {/* Coupon */}
+                <div className="space-y-2">
+                  {appliedCoupon ? (
+                    <div className="flex items-center justify-between rounded-md bg-green-50 px-3 py-2 text-sm">
+                      <span className="flex items-center gap-2 font-medium text-green-700">
+                        <Tag className="h-4 w-4" />
+                        {appliedCoupon}
+                      </span>
+                      <button
+                        type="button"
+                        className="text-muted-foreground hover:text-foreground"
+                        onClick={() => setAppliedCoupon(null)}
+                        aria-label="Remove coupon"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="Coupon code"
+                        value={couponInput}
+                        onChange={(e) => setCouponInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleApplyCoupon();
+                          }
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={handleApplyCoupon}
+                        disabled={isApplyingCoupon || !couponInput.trim()}
+                      >
+                        {isApplyingCoupon ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Apply'}
+                      </Button>
+                    </div>
+                  )}
+                  {couponError && <p className="text-sm text-destructive">{couponError}</p>}
+                </div>
+
+                <Separator />
+
                 {/* Totals */}
                 <div className="space-y-2">
                   <div className="flex justify-between text-sm">
@@ -563,8 +679,16 @@ export default function CheckoutPage() {
                     </span>
                     <span>{formatPrice(subtotal)}</span>
                   </div>
+                  {discount > 0 && (
+                    <div className="flex justify-between text-sm text-green-700">
+                      <span>Discount</span>
+                      <span>-{formatPrice(discount)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">Delivery Fee</span>
+                    <span className="text-muted-foreground">
+                      Delivery Fee{!quote && destinationCity === '' ? ' (estimate)' : ''}
+                    </span>
                     <span>
                       {deliveryFee === 0 ? (
                         <span className="text-green-600">Free</span>

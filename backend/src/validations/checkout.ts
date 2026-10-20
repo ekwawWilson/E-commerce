@@ -19,6 +19,7 @@ export const checkoutSchema = z.object({
   customer: customerInfoSchema,
   paymentMethod: z.nativeEnum(PaymentMethod),
   momoPhoneNumber: z.string().optional(),
+  couponCode: z.string().trim().max(50).optional(),
   notes: z.string().max(500).optional(),
 });
 

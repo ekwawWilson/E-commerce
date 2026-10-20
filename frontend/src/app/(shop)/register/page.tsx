@@ -21,7 +21,7 @@ const registerSchema = z.object({
     .string()
     .min(9, 'Phone number must be at least 9 digits')
     .regex(/^[\d+\s-]+$/, 'Invalid phone number'),
-  password: z.string().min(6, 'Password must be at least 6 characters'),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
   confirmPassword: z.string(),
 }).refine((data) => data.password === data.confirmPassword, {
   message: 'Passwords do not match',

@@ -1,8 +1,15 @@
 import prisma from '../../config/database';
-import { Prisma, PayoutStatus } from '@prisma/client';
+import { Prisma, PayoutStatus, PaymentStatus } from '@prisma/client';
 import { parsePaginationParams } from '../../utils/helpers';
-import { NotFoundError } from '../../middleware/errorHandler';
+import { NotFoundError, AppError } from '../../middleware/errorHandler';
 import { settingsService } from '../settings/settings.service';
+
+export const PAYOUT_TRANSITIONS: Record<PayoutStatus, PayoutStatus[]> = {
+  [PayoutStatus.PENDING]: [PayoutStatus.PROCESSING, PayoutStatus.COMPLETED, PayoutStatus.FAILED],
+  [PayoutStatus.PROCESSING]: [PayoutStatus.COMPLETED, PayoutStatus.FAILED],
+  [PayoutStatus.COMPLETED]: [],
+  [PayoutStatus.FAILED]: [],
+};
 
 export interface PayoutListParams {
   page?: number;
@@ -90,9 +97,18 @@ export class PayoutService {
   }
 
   /**
-   * Generate payouts for a period
+   * Generate payouts for a period.
+   *
+   * Pays each supplier for its items delivered in the period whose order was
+   * paid and not cancelled. Every item can belong to only one payout (via
+   * OrderItem.payoutId), so overlapping periods or a second run never pay an
+   * item twice.
    */
   async generatePayouts(periodStart: Date, periodEnd: Date) {
+    if (!(periodStart < periodEnd)) {
+      throw new AppError('The period start must be before its end', 400);
+    }
+
     // Get all active suppliers
     const suppliers = await prisma.supplier.findMany({
       where: { status: 'ACTIVE' },
@@ -115,9 +131,14 @@ export class PayoutService {
         where: {
           supplierId: supplier.id,
           fulfillmentStatus: 'DELIVERED',
+          payoutId: null,
           deliveredAt: {
             gte: periodStart,
             lte: periodEnd,
+          },
+          order: {
+            paymentStatus: PaymentStatus.PAID,
+            cancelledAt: null,
           },
         },
         select: {
@@ -132,32 +153,36 @@ export class PayoutService {
       const grossAmount = orderItems.reduce((sum, item) => sum + item.totalPrice.toNumber(), 0);
       const commissionAmount = orderItems.reduce((sum, item) => sum + item.commissionAmount.toNumber(), 0);
       const netAmount = grossAmount - commissionAmount;
+      const itemIds = orderItems.map((item) => item.id);
 
-      // Check if payout already exists for this period
-      const existingPayout = await prisma.supplierPayout.findFirst({
-        where: {
-          supplierId: supplier.id,
-          periodStart,
-          periodEnd,
-        },
-      });
+      const payout = await prisma.$transaction(async (tx) => {
+        const created = await tx.supplierPayout.create({
+          data: {
+            supplierId: supplier.id,
+            periodStart,
+            periodEnd,
+            grossAmount,
+            commissionAmount,
+            netAmount,
+            currency: payoutCurrency,
+            status: 'PENDING',
+            orderItemIds: itemIds,
+            itemCount: orderItems.length,
+          },
+        });
 
-      if (existingPayout) continue;
+        // Claim the items. If a concurrent run claimed any first, the counts
+        // differ and this payout is rolled back instead of double-paying.
+        const { count } = await tx.orderItem.updateMany({
+          where: { id: { in: itemIds }, payoutId: null },
+          data: { payoutId: created.id },
+        });
 
-      // Create payout record
-      const payout = await prisma.supplierPayout.create({
-        data: {
-          supplierId: supplier.id,
-          periodStart,
-          periodEnd,
-          grossAmount,
-          commissionAmount,
-          netAmount,
-          currency: payoutCurrency,
-          status: 'PENDING',
-          orderItemIds: orderItems.map(item => item.id),
-          itemCount: orderItems.length,
-        },
+        if (count !== itemIds.length) {
+          throw new AppError('Payouts are already being generated. Please try again shortly.', 409);
+        }
+
+        return created;
       });
 
       payouts.push(payout);
@@ -167,7 +192,8 @@ export class PayoutService {
   }
 
   /**
-   * Update payout status
+   * Update payout status. COMPLETED and FAILED are final; a failed payout
+   * releases its items so the next payout run can include them.
    */
   async updatePayoutStatus(
     payoutId: string,
@@ -183,7 +209,11 @@ export class PayoutService {
       throw new NotFoundError('Payout');
     }
 
-    const updates: Prisma.SupplierPayoutUpdateInput = {
+    if (!PAYOUT_TRANSITIONS[payout.status].includes(status)) {
+      throw new AppError(`A ${payout.status} payout can't be changed to ${status}`, 400);
+    }
+
+    const updates: Prisma.SupplierPayoutUpdateManyMutationInput = {
       status,
     };
 
@@ -199,17 +229,32 @@ export class PayoutService {
       updates.paidAt = new Date();
     }
 
-    const updatedPayout = await prisma.supplierPayout.update({
+    await prisma.$transaction(async (tx) => {
+      const { count } = await tx.supplierPayout.updateMany({
+        where: { id: payoutId, status: payout.status },
+        data: updates,
+      });
+
+      if (count === 0) {
+        throw new AppError('This payout was updated by someone else. Please refresh and try again.', 409);
+      }
+
+      if (status === PayoutStatus.FAILED) {
+        await tx.orderItem.updateMany({
+          where: { payoutId },
+          data: { payoutId: null },
+        });
+      }
+    });
+
+    return prisma.supplierPayout.findUniqueOrThrow({
       where: { id: payoutId },
-      data: updates,
       include: {
         supplier: {
           select: { businessName: true },
         },
       },
     });
-
-    return updatedPayout;
   }
 
   /**

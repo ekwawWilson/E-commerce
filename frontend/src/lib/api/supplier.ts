@@ -138,17 +138,33 @@ export const supplierApi = {
   // Categories (public)
   getCategories: () => fetch(`${API_URL}/categories`).then(r => r.json()),
 
-  // Upload
-  uploadImage: async (file: File) => {
+  // Upload: suppliers have their own endpoints, which store images in the
+  // supplier's folder (the admin upload endpoints need an admin login)
+  uploadImages: async (files: File[]) => {
     const formData = new FormData();
-    formData.append('image', file);
+    files.forEach((file) => formData.append('images', file));
 
-    const response = await fetch(`${API_URL}/admin/upload/image`, {
+    const response = await fetch(`${API_URL}/supplier-portal/upload/images`, {
       method: 'POST',
       headers: getAuthHeaders(),
       body: formData,
     });
 
-    return response.json();
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Upload failed');
+    }
+    return data;
   },
+
+  deleteImage: (publicId: string) =>
+    fetchWithAuth(`${API_URL}/supplier-portal/upload/image`, {
+      method: 'DELETE',
+      body: JSON.stringify({ publicId }),
+    }),
+};
+
+export const supplierImageUploader = {
+  upload: (files: File[]) => supplierApi.uploadImages(files),
+  remove: (publicId: string) => supplierApi.deleteImage(publicId),
 };

@@ -350,7 +350,14 @@ export const useCustomerStore = create<CustomerState>((set, get) => ({
 
     set({ isLoading: true });
     try {
-      await customerApi.changePassword(token, currentPassword, newPassword);
+      // Changing the password signs out other sessions; keep this one signed
+      // in with the fresh token the server returns
+      const response: any = await customerApi.changePassword(token, currentPassword, newPassword);
+      const newToken = response?.data?.token;
+      if (newToken) {
+        await AsyncStorage.setItem(AUTH_TOKEN_KEY, newToken);
+        set({ token: newToken });
+      }
     } finally {
       set({ isLoading: false });
     }

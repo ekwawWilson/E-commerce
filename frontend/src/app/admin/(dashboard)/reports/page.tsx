@@ -136,17 +136,17 @@ export default function ReportsPage() {
     fetchReportData();
   }, [dateRange]);
 
+  // Report types the API builds as CSV
+  const REPORT_TYPES = { sales: 'SALES', products: 'INVENTORY', orders: 'ORDERS' } as const;
+
   const handleDownloadReport = async (type: 'sales' | 'products' | 'orders') => {
     setIsDownloading(type);
     try {
       const { startDate, endDate } = getDateRange(dateRange);
-      const response = await adminApi.downloadReport(type, { startDate, endDate });
-
-      if (response.success && response.data?.url) {
-        window.open(response.data.url, '_blank');
-      }
+      await adminApi.downloadReport(REPORT_TYPES[type], startDate, endDate);
     } catch (error) {
       console.error('Failed to download report:', error);
+      alert('Could not download the report. Please try again.');
     } finally {
       setIsDownloading(null);
     }

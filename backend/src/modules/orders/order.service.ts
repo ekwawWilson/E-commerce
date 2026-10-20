@@ -1,18 +1,21 @@
 import prisma from '../../config/database';
 import config from '../../config';
 import { PaymentMethod, PaymentStatus, DeliveryStatus, FulfillmentStatus, Prisma } from '@prisma/client';
-import { generateOrderNumber, generateTrackingNumber, parsePaginationParams, calculateDeliveryFee } from '../../utils/helpers';
+import { generateOrderNumber, generateTrackingNumber, parsePaginationParams, sanitizePhoneNumber } from '../../utils/helpers';
 import { NotFoundError, AppError } from '../../middleware/errorHandler';
-import { cartService } from '../cart/cart.service';
+import { cartService, CartWithItems } from '../cart/cart.service';
+import { couponService } from '../coupons/coupon.service';
 import { recalcProductRollup } from '../products/product-write.core';
 import { settingsService } from '../settings/settings.service';
 import { OrderItemSnapshot, DeliverySettings } from '../../types';
 import { emailQueue, smsQueue, pdfQueue } from '../../config/queue';
-import { sendOrderConfirmationEmail, sendDeliveryUpdateEmail } from '../notifications/email.service';
+import { sendOrderConfirmationEmail } from '../notifications/email.service';
+import { calculateOrderDeliveryFee } from './delivery-fee';
+import logger from '../../utils/logger';
 
 export interface CheckoutData {
   cartId: string;
-  customerId?: string; // Optional - set for logged-in customers
+  customerId?: string; // Set from the authenticated customer, never the request body
   customer: {
     name: string;
     phone: string;
@@ -24,6 +27,7 @@ export interface CheckoutData {
   };
   paymentMethod: PaymentMethod;
   momoPhoneNumber?: string;
+  couponCode?: string;
   notes?: string;
 }
 
@@ -40,14 +44,49 @@ export interface OrderListParams {
   supplierId?: string;
 }
 
+export type CancelActor =
+  | { type: 'customer'; customerId: string }
+  | { type: 'admin'; adminId: string }
+  | { type: 'system' };
+
+// Items a customer may still cancel: the supplier hasn't started preparing them
+const CUSTOMER_CANCELLABLE: FulfillmentStatus[] = [FulfillmentStatus.PENDING, FulfillmentStatus.CONFIRMED];
+// Items an admin may cancel: anything that hasn't left the supplier yet
+const ADMIN_CANCELLABLE: FulfillmentStatus[] = [
+  FulfillmentStatus.PENDING,
+  FulfillmentStatus.CONFIRMED,
+  FulfillmentStatus.PROCESSING,
+];
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+function sameContact(
+  order: { customerPhone: string; customerEmail: string | null },
+  contact: { phone?: string; email?: string }
+): boolean {
+  if (contact.phone) {
+    const digits = (p: string) => sanitizePhoneNumber(p).replace(/\D/g, '');
+    return digits(order.customerPhone) === digits(contact.phone);
+  }
+  if (contact.email && order.customerEmail) {
+    return order.customerEmail.trim().toLowerCase() === contact.email.trim().toLowerCase();
+  }
+  return false;
+}
+
 export class OrderService {
   /**
    * Create order from checkout
    */
-  async checkout(data: CheckoutData) {
-    // Validate cart
-    const cart = await cartService.validateCartForCheckout(data.cartId);
-
+  /**
+   * Price a cart for a destination: subtotal, coupon discount, delivery fee
+   * and total. Shared by checkout and the checkout quote so they always agree.
+   */
+  private async priceCart(
+    cart: CartWithItems,
+    destination: { city: string; region?: string },
+    couponCode?: string
+  ) {
     // Get delivery settings
     const deliverySettingsRecord = await prisma.setting.findUnique({
       where: { key: 'delivery_settings' },
@@ -60,14 +99,56 @@ export class OrderService {
       free_delivery_threshold: 2000,
     }) as DeliverySettings;
 
-    // Calculate totals
-    const cartTotals = cartService.calculateCartTotals(cart);
-    const deliveryFee = calculateDeliveryFee(
-      cartTotals.subtotal,
-      deliverySettings.default_fee,
-      deliverySettings.free_delivery_threshold
+    const { subtotal } = cartService.calculateCartTotals(cart);
+
+    const applied = couponCode ? await couponService.evaluate(couponCode, subtotal) : null;
+    const discount = applied?.discount ?? 0;
+    const discountedSubtotal = round2(subtotal - discount);
+
+    const deliveryFee = calculateOrderDeliveryFee(
+      cart.items.map((item) => ({
+        label: item.snapshotVariantName ? `${item.snapshotName} (${item.snapshotVariantName})` : item.snapshotName,
+        supplierId: item.product.supplierId,
+        deliveryZones: item.product.deliveryZones,
+      })),
+      destination,
+      deliverySettings,
+      discountedSubtotal
     );
-    const total = cartTotals.subtotal + deliveryFee;
+
+    return {
+      subtotal,
+      discount,
+      couponCode: applied?.coupon.code ?? null,
+      coupon: applied?.coupon ?? null,
+      deliveryFee,
+      total: round2(discountedSubtotal + deliveryFee),
+    };
+  }
+
+  /**
+   * What checkout would charge, without placing the order
+   */
+  async quote(data: { cartId: string; city: string; region?: string; couponCode?: string }) {
+    const cart = await cartService.getCart(data.cartId);
+    const { coupon, ...pricing } = await this.priceCart(
+      cart,
+      { city: data.city, region: data.region },
+      data.couponCode
+    );
+    return pricing;
+  }
+
+  async checkout(data: CheckoutData) {
+    // Validate cart (availability, stock, current prices)
+    const cart = await cartService.validateCartForCheckout(data.cartId);
+
+    const { subtotal, discount, deliveryFee, total, coupon } = await this.priceCart(
+      cart,
+      { city: data.customer.city, region: data.customer.region },
+      data.couponCode
+    );
+    const applied = coupon ? { coupon } : null;
 
     // Currency comes from admin store settings so it can be changed without a
     // redeploy; cart item currency still wins, since those were snapshotted at
@@ -100,6 +181,10 @@ export class OrderService {
 
     // Create order in transaction
     const order = await prisma.$transaction(async (tx) => {
+      if (applied) {
+        await couponService.redeem(tx, applied.coupon.id);
+      }
+
       // Create the order
       const newOrder = await tx.order.create({
         data: {
@@ -116,9 +201,10 @@ export class OrderService {
           paymentMethod: data.paymentMethod,
           paymentStatus: PaymentStatus.PENDING,
           deliveryStatus: DeliveryStatus.PENDING,
-          subtotal: cartTotals.subtotal,
+          subtotal,
           deliveryFee,
-          discount: 0,
+          discount,
+          couponCode: applied?.coupon.code,
           total,
           currency: cart.items[0]?.currency || storeCurrency,
           notes: data.notes,
@@ -141,6 +227,7 @@ export class OrderService {
           commissionRate = supplier?.commissionRate.toNumber() || 0;
         }
 
+        // Commission is on the full price: coupons are platform-funded
         const itemTotal = Number(item.snapshotPrice) * item.quantity;
         const commission = itemTotal * (commissionRate / 100);
 
@@ -306,48 +393,48 @@ export class OrderService {
   }
 
   /**
-   * Get order by order number
+   * Public order view by ID, for the confirmation and payment pages. Contains
+   * no personal details: the ID is hard to guess but appears in URLs.
    */
-  async getOrderByNumber(orderNumber: string) {
-    const order = await prisma.order.findUnique({
-      where: { orderNumber },
-      include: {
-        payment: true,
-        delivery: {
-          include: {
-            courier: true,
-          },
-        },
-      },
-    });
+  async getPublicOrder(id: string) {
+    const order = await this.getOrderById(id);
 
-    if (!order) {
-      throw new NotFoundError('Order');
-    }
-
-    return order;
+    return {
+      id: order.id,
+      orderNumber: order.orderNumber,
+      // `status` is kept for older app builds that read it
+      status: order.paymentStatus,
+      paymentStatus: order.paymentStatus,
+      paymentMethod: order.paymentMethod,
+      deliveryStatus: order.deliveryStatus,
+      cancelledAt: order.cancelledAt,
+      items: order.itemsSnapshot,
+      itemsSnapshot: order.itemsSnapshot,
+      subtotal: order.subtotal,
+      discount: order.discount,
+      couponCode: order.couponCode,
+      deliveryFee: order.deliveryFee,
+      total: order.total,
+      currency: order.currency,
+      createdAt: order.createdAt,
+      delivery: order.delivery
+        ? {
+            status: order.delivery.status,
+            trackingNumber: order.delivery.trackingNumber,
+            estimatedDate: order.delivery.estimatedDate,
+          }
+        : null,
+    };
   }
 
   /**
-   * Track order (public)
+   * Track order (public). The caller must know both the order number and the
+   * phone number or email it was placed with; a wrong pair is indistinguishable
+   * from a missing order, so this can't be used to probe for orders.
    */
-  async trackOrder(params: { orderNumber?: string; phone?: string; email?: string }) {
-    const { orderNumber, phone, email } = params;
-
-    const where: Prisma.OrderWhereInput = {};
-
-    if (orderNumber) {
-      where.orderNumber = orderNumber;
-    } else if (phone) {
-      where.customerPhone = { contains: phone };
-    } else if (email) {
-      where.customerEmail = email;
-    } else {
-      throw new AppError('Order number, phone, or email is required', 400);
-    }
-
-    const orders = await prisma.order.findMany({
-      where,
+  async trackOrder(params: { orderNumber: string; phone?: string; email?: string }) {
+    const order = await prisma.order.findUnique({
+      where: { orderNumber: params.orderNumber.trim().toUpperCase() },
       include: {
         delivery: {
           select: {
@@ -357,23 +444,37 @@ export class OrderService {
             pickedUpAt: true,
             inTransitAt: true,
             deliveredAt: true,
+            courier: { select: { name: true } },
           },
         },
       },
-      orderBy: { createdAt: 'desc' },
-      take: 10,
     });
 
-    return orders.map((order) => ({
+    if (!order || !sameContact(order, params)) {
+      throw new NotFoundError('Order');
+    }
+
+    return {
+      id: order.id,
       orderNumber: order.orderNumber,
-      status: order.paymentStatus,
+      createdAt: order.createdAt,
+      paymentMethod: order.paymentMethod,
+      paymentStatus: order.paymentStatus,
       deliveryStatus: order.deliveryStatus,
+      cancelledAt: order.cancelledAt,
+      customerName: order.customerName,
+      customerPhone: order.customerPhone,
+      deliveryAddress: [order.customerAddress, order.customerCity, order.customerRegion]
+        .filter(Boolean)
+        .join(', '),
+      itemsSnapshot: order.itemsSnapshot,
+      subtotal: order.subtotal,
+      discount: order.discount,
+      deliveryFee: order.deliveryFee,
       total: order.total,
       currency: order.currency,
-      createdAt: order.createdAt,
       delivery: order.delivery,
-      items: order.itemsSnapshot,
-    }));
+    };
   }
 
   /**
@@ -477,6 +578,15 @@ export class OrderService {
       throw new NotFoundError('Order');
     }
 
+    if (order.cancelledAt && data.deliveryStatus) {
+      throw new AppError('This order has been cancelled', 400);
+    }
+
+    // Refunds go through recordRefund so the refund details are captured
+    if (data.paymentStatus === PaymentStatus.REFUNDED) {
+      throw new AppError('Use the refund action to record a refund', 400);
+    }
+
     const updates: Prisma.OrderUpdateInput = {};
 
     if (data.paymentStatus) {
@@ -568,6 +678,10 @@ export class OrderService {
       throw new NotFoundError('Order');
     }
 
+    if (order.cancelledAt) {
+      throw new AppError('This order has been cancelled', 400);
+    }
+
     if (!order.delivery) {
       throw new AppError('Delivery record not found', 400);
     }
@@ -608,6 +722,181 @@ export class OrderService {
     await this.queueStatusUpdateNotification(id);
 
     return updatedOrder;
+  }
+
+  /**
+   * Cancel an order: cancels its unshipped items, returns their stock, gives
+   * back the coupon use and closes an unpaid payment. A paid order stays PAID
+   * and is flagged `refundDue` until an admin records the refund.
+   */
+  async cancelOrder(orderId: string, actor: CancelActor, reason: string) {
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: { items: true, payment: true },
+    });
+
+    if (!order || (actor.type === 'customer' && order.customerId !== actor.customerId)) {
+      throw new NotFoundError('Order');
+    }
+
+    if (order.cancelledAt) {
+      throw new AppError('This order is already cancelled', 400);
+    }
+
+    const allowed = actor.type === 'customer' ? CUSTOMER_CANCELLABLE : ADMIN_CANCELLABLE;
+    const live = order.items.filter((i) => i.fulfillmentStatus !== FulfillmentStatus.CANCELLED);
+
+    if (live.some((i) => !allowed.includes(i.fulfillmentStatus))) {
+      throw new AppError(
+        actor.type === 'customer'
+          ? 'This order is already being prepared and can no longer be cancelled. Please contact support.'
+          : 'Some items have already shipped, so this order can no longer be cancelled',
+        400
+      );
+    }
+
+    await prisma.$transaction(async (tx) => {
+      // Conditional on not already cancelled, so concurrent cancels run once
+      const { count } = await tx.order.updateMany({
+        where: { id: orderId, cancelledAt: null },
+        data: { cancelledAt: new Date(), cancelReason: reason },
+      });
+      if (count === 0) {
+        throw new AppError('This order is already cancelled', 409);
+      }
+
+      // Conditional too: if a supplier shipped an item in the meantime, the
+      // counts differ and the whole cancellation rolls back.
+      const cancelled = await tx.orderItem.updateMany({
+        where: { id: { in: live.map((i) => i.id) }, fulfillmentStatus: { in: allowed } },
+        data: { fulfillmentStatus: FulfillmentStatus.CANCELLED },
+      });
+      if (cancelled.count !== live.length) {
+        throw new AppError('The order changed while cancelling. Please try again.', 409);
+      }
+
+      const touchedProductIds = new Set<string>();
+      for (const item of live) {
+        if (!item.variantId) continue;
+
+        const variant = await tx.productVariant.update({
+          where: { id: item.variantId },
+          data: { stock: { increment: item.quantity } },
+        });
+        touchedProductIds.add(item.productId);
+
+        await tx.inventoryLog.create({
+          data: {
+            productId: item.productId,
+            productName: item.variantName ? `${item.productName} (${item.variantName})` : item.productName,
+            previousStock: variant.stock - item.quantity,
+            newStock: variant.stock,
+            change: item.quantity,
+            reason: 'CANCELLED',
+            referenceId: orderId,
+            referenceType: 'ORDER',
+            performedBy: actor.type === 'admin' ? actor.adminId : null,
+          },
+        });
+      }
+
+      for (const productId of touchedProductIds) {
+        await recalcProductRollup(productId, tx);
+      }
+
+      if (order.couponCode) {
+        await couponService.release(tx, order.couponCode);
+      }
+
+      // An unpaid payment can no longer complete; a paid one awaits a refund
+      if (order.payment && order.payment.status === PaymentStatus.PENDING) {
+        await tx.payment.update({
+          where: { id: order.payment.id },
+          data: { status: PaymentStatus.FAILED, failedAt: new Date(), failedReason: 'Order cancelled' },
+        });
+        await tx.order.update({ where: { id: orderId }, data: { paymentStatus: PaymentStatus.FAILED } });
+      }
+    });
+
+    await this.queueCancellationNotification(orderId).catch((error) =>
+      logger.error('Failed to queue cancellation notification:', error)
+    );
+
+    const updated = await this.getOrderById(orderId);
+    return { order: updated, refundDue: updated.paymentStatus === PaymentStatus.PAID };
+  }
+
+  /**
+   * Record a refund for a cancelled, paid order. The money itself is sent
+   * outside the system (e.g. a MoMo transfer); this records that it was.
+   */
+  async recordRefund(orderId: string, data: { reason: string; reference?: string }) {
+    const order = await prisma.order.findUnique({ where: { id: orderId }, include: { payment: true } });
+
+    if (!order || !order.payment) {
+      throw new NotFoundError('Order');
+    }
+    if (!order.cancelledAt) {
+      throw new AppError('Cancel the order before recording a refund', 400);
+    }
+    if (order.payment.status !== PaymentStatus.PAID) {
+      throw new AppError('Only paid orders can be refunded', 400);
+    }
+
+    await prisma.$transaction([
+      prisma.payment.update({
+        where: { id: order.payment.id },
+        data: {
+          status: PaymentStatus.REFUNDED,
+          refundedAt: new Date(),
+          refundReason: data.reason,
+          refundReference: data.reference,
+        },
+      }),
+      prisma.order.update({ where: { id: orderId }, data: { paymentStatus: PaymentStatus.REFUNDED } }),
+    ]);
+
+    if (smsQueue) {
+      await smsQueue.add('refund', {
+        to: order.customerPhone,
+        message: `A refund of ${order.total} ${order.currency} for order ${order.orderNumber} has been sent.`,
+        orderId,
+      });
+    }
+
+    return this.getOrderById(orderId);
+  }
+
+  /**
+   * Cancel Mobile Money orders that were never paid, so they stop holding
+   * stock. Runs on a timer; safe to run concurrently because cancelOrder is
+   * conditional.
+   */
+  async cancelStaleUnpaidOrders(maxAgeHours = config.unpaidOrderTtlHours) {
+    const cutoff = new Date(Date.now() - maxAgeHours * 60 * 60 * 1000);
+
+    const stale = await prisma.order.findMany({
+      where: {
+        paymentMethod: PaymentMethod.MOMO,
+        paymentStatus: { in: [PaymentStatus.PENDING, PaymentStatus.FAILED] },
+        cancelledAt: null,
+        createdAt: { lt: cutoff },
+      },
+      select: { id: true, orderNumber: true },
+      take: 100,
+    });
+
+    let cancelled = 0;
+    for (const order of stale) {
+      try {
+        await this.cancelOrder(order.id, { type: 'system' }, 'Payment not received in time');
+        cancelled++;
+      } catch (error) {
+        logger.warn(`Could not auto-cancel unpaid order ${order.orderNumber}:`, error);
+      }
+    }
+
+    return cancelled;
   }
 
   /**
@@ -681,7 +970,7 @@ export class OrderService {
    * Generate invoice PDF
    */
   async generateInvoice(id: string) {
-    const order = await this.getOrderById(id);
+    await this.getOrderById(id);
 
     if (pdfQueue) {
       await pdfQueue.add('generate-invoice', {
@@ -699,7 +988,8 @@ export class OrderService {
   private async queueOrderNotifications(orderId: string) {
     const order = await this.getOrderById(orderId);
 
-    // Send email directly (doesn't require Redis)
+    // Confirmation email is sent directly so it works without Redis. (It used
+    // to be queued as well, which sent customers two copies.)
     if (order.customerEmail) {
       try {
         await sendOrderConfirmationEmail({
@@ -717,27 +1007,8 @@ export class OrderService {
         });
       } catch (error) {
         // Log error but don't fail the order
-        console.error('Failed to send order confirmation email:', error);
+        logger.error('Failed to send order confirmation email:', error);
       }
-    }
-
-    // Email notification via queue (if queue is available - fallback)
-    if (order.customerEmail && emailQueue) {
-      await emailQueue.add('order-confirmation', {
-        to: order.customerEmail,
-        subject: `Order Confirmation - ${order.orderNumber}`,
-        template: 'order-confirmation',
-        data: {
-          orderNumber: order.orderNumber,
-          customerName: order.customerName,
-          items: order.itemsSnapshot,
-          subtotal: Number(order.subtotal),
-          deliveryFee: Number(order.deliveryFee),
-          total: Number(order.total),
-          currency: order.currency,
-        },
-        orderId,
-      });
     }
 
     // SMS notification (if queue is available)
@@ -784,6 +1055,32 @@ export class OrderService {
           orderNumber: order.orderNumber,
           customerName: order.customerName,
           status: order.deliveryStatus,
+          message,
+        },
+        orderId,
+      });
+    }
+  }
+
+  private async queueCancellationNotification(orderId: string) {
+    const order = await this.getOrderById(orderId);
+    const message = `Your order ${order.orderNumber} has been cancelled.${
+      order.paymentStatus === PaymentStatus.PAID ? ' Your payment will be refunded.' : ''
+    }`;
+
+    if (smsQueue) {
+      await smsQueue.add('order-cancelled', { to: order.customerPhone, message, orderId });
+    }
+
+    if (order.customerEmail && emailQueue) {
+      await emailQueue.add('order-cancelled', {
+        to: order.customerEmail,
+        subject: `Order Cancelled - ${order.orderNumber}`,
+        template: 'order-status-update',
+        data: {
+          orderNumber: order.orderNumber,
+          customerName: order.customerName,
+          status: 'CANCELLED',
           message,
         },
         orderId,

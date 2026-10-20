@@ -6,6 +6,7 @@ import {
   createSupplierProductSchema,
   updateSupplierProductSchema,
 } from '../../validations';
+import { supplierUploadRoutes } from './supplier-upload.routes';
 
 const router = Router();
 
@@ -48,6 +49,9 @@ router.patch(
 
 // Payouts
 router.get('/payouts', supplierPortalController.getPayouts);
+
+// Product image uploads (into the supplier's own folder)
+router.use('/upload', supplierUploadRoutes);
 
 export const supplierPortalRoutes = router;
 

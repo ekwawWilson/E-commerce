@@ -1,4 +1,4 @@
-import { getAuthToken } from '@/stores/auth';
+import { getAuthToken, useAuthStore } from '@/stores/auth';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
@@ -24,7 +24,8 @@ async function handleResponse(response: Response): Promise<any> {
     }
     throw new ApiError(
       response.status,
-      data.message || 'An error occurred',
+      // The API puts the message in `error`; validation failures also list `errors`
+      data.error || data.message || 'An error occurred',
       data.errors
     );
   }
@@ -69,7 +70,13 @@ export const adminApi = {
       headers: getHeaders(),
       body: JSON.stringify({ currentPassword, newPassword }),
     });
-    return handleResponse(response);
+    const result = await handleResponse(response);
+    // Other sessions are signed out; keep this one with the fresh token
+    if (result.data?.token) {
+      const admin = useAuthStore.getState().admin;
+      if (admin) useAuthStore.getState().login(result.data.token, admin);
+    }
+    return result;
   },
 
   // Products
@@ -233,7 +240,26 @@ export const adminApi = {
     const response = await fetch(`${API_BASE_URL}/admin/orders/${id}/payment-status`, {
       method: 'PATCH',
       headers: getHeaders(),
-      body: JSON.stringify({ status }),
+      // The API field is paymentStatus; `status` was silently dropped
+      body: JSON.stringify({ paymentStatus: status }),
+    });
+    return handleResponse(response);
+  },
+
+  async cancelOrder(id: string, reason: string) {
+    const response = await fetch(`${API_BASE_URL}/admin/orders/${id}/cancel`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ reason }),
+    });
+    return handleResponse(response);
+  },
+
+  async recordRefund(id: string, reason: string, reference?: string) {
+    const response = await fetch(`${API_BASE_URL}/admin/orders/${id}/refund`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ reason, reference: reference || undefined }),
     });
     return handleResponse(response);
   },
@@ -259,6 +285,64 @@ export const adminApi = {
       body: JSON.stringify({ status }),
     });
     return handleResponse(response);
+  },
+
+  // Coupons
+  async getCoupons() {
+    const response = await fetch(`${API_BASE_URL}/admin/coupons`, { headers: getHeaders() });
+    return handleResponse(response);
+  },
+
+  async createCoupon(data: Record<string, unknown>) {
+    const response = await fetch(`${API_BASE_URL}/admin/coupons`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse(response);
+  },
+
+  async updateCoupon(id: string, data: Record<string, unknown>) {
+    const response = await fetch(`${API_BASE_URL}/admin/coupons/${id}`, {
+      method: 'PUT',
+      headers: getHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse(response);
+  },
+
+  async deleteCoupon(id: string) {
+    const response = await fetch(`${API_BASE_URL}/admin/coupons/${id}`, {
+      method: 'DELETE',
+      headers: getHeaders(),
+    });
+    return handleResponse(response);
+  },
+
+  // Reports: create a CSV report and download it
+  async downloadReport(type: string, startDate: string, endDate: string) {
+    const created = await handleResponse(
+      await fetch(`${API_BASE_URL}/admin/reports/generate`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ type, startDate, endDate, format: 'csv' }),
+      })
+    );
+    const response = await fetch(`${API_BASE_URL}/admin/reports/${created.data.id}/download`, {
+      headers: getHeaders(),
+    });
+    if (!response.ok) {
+      throw new ApiError(response.status, 'Could not download the report');
+    }
+    const blob = await response.blob();
+    const filename =
+      response.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1] || `${type.toLowerCase()}-report.csv`;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
   },
 
   // Upload
@@ -372,22 +456,6 @@ export const adminApi = {
 
     const response = await fetch(
       `${API_BASE_URL}/admin/reports/summary?${searchParams.toString()}`,
-      { headers: getHeaders() }
-    );
-    return handleResponse(response);
-  },
-
-  async downloadReport(type: string, params?: { startDate?: string; endDate?: string }) {
-    const searchParams = new URLSearchParams();
-    searchParams.append('type', type);
-    if (params) {
-      Object.entries(params).forEach(([key, value]) => {
-        if (value) searchParams.append(key, value);
-      });
-    }
-
-    const response = await fetch(
-      `${API_BASE_URL}/admin/reports/download?${searchParams.toString()}`,
       { headers: getHeaders() }
     );
     return handleResponse(response);

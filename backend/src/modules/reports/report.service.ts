@@ -1,8 +1,8 @@
 import prisma from '../../config/database';
 import { ReportType, ReportStatus, PaymentStatus, DeliveryStatus } from '@prisma/client';
 import { getDateRange } from '../../utils/helpers';
-import { reportQueue } from '../../config/queue';
 import { NotFoundError } from '../../middleware/errorHandler';
+import { toCsv } from './report-csv';
 
 export interface DashboardStats {
   totalOrders: number;
@@ -289,37 +289,141 @@ export class ReportService {
   }
 
   /**
-   * Generate a report (async via queue)
+   * Generate a report.
+   *
+   * Reports are CSV files built from the live data each time they're
+   * downloaded, so there's no background job or file storage to fail. (They
+   * used to be queued for a worker that didn't exist and stayed PENDING.)
    */
   async generateReport(
     type: ReportType,
-    parameters: { startDate: Date; endDate: Date; format?: 'pdf' | 'csv' },
+    parameters: { startDate: Date; endDate: Date; format?: 'csv' },
     adminId: string
   ) {
-    // Create report record
     const report = await prisma.report.create({
       data: {
-        name: `${type} Report - ${parameters.startDate.toLocaleDateString()} to ${parameters.endDate.toLocaleDateString()}`,
+        name: `${type} Report - ${parameters.startDate.toISOString().slice(0, 10)} to ${parameters.endDate.toISOString().slice(0, 10)}`,
         type,
-        status: ReportStatus.PENDING,
-        parameters,
+        status: ReportStatus.COMPLETED,
+        parameters: {
+          startDate: parameters.startDate.toISOString(),
+          endDate: parameters.endDate.toISOString(),
+          format: 'csv',
+        },
         generatedBy: adminId,
+        startedAt: new Date(),
+        completedAt: new Date(),
       },
     });
 
-    // Queue report generation
-    await reportQueue.add('generate-report', {
-      type,
-      parameters: {
-        startDate: parameters.startDate.toISOString(),
-        endDate: parameters.endDate.toISOString(),
-        format: parameters.format || 'pdf',
-      },
-      adminId,
-      reportId: report.id,
+    return prisma.report.update({
+      where: { id: report.id },
+      data: { fileUrl: `/api/admin/reports/${report.id}/download` },
     });
+  }
 
-    return report;
+  /**
+   * Build a report's CSV file
+   */
+  async buildReportCsv(id: string): Promise<{ filename: string; csv: string }> {
+    const report = await this.getReportById(id);
+    const params = (report.parameters ?? {}) as { startDate?: string; endDate?: string };
+    const startDate = params.startDate ? new Date(params.startDate) : new Date(0);
+    const endDate = params.endDate ? new Date(params.endDate) : new Date();
+    // An end date without a time means "through the end of that day"
+    if (endDate.getUTCHours() === 0 && endDate.getUTCMinutes() === 0) {
+      endDate.setUTCHours(23, 59, 59, 999);
+    }
+
+    const range = { gte: startDate, lte: endDate };
+    let csv: string;
+
+    switch (report.type) {
+      case ReportType.SALES: {
+        const rows = await this.getSalesReport(startDate, endDate);
+        csv = toCsv(rows, [
+          { header: 'Date', value: (r) => r.date },
+          { header: 'Paid orders', value: (r) => r.orders },
+          { header: 'Items sold', value: (r) => r.items },
+          { header: 'Revenue', value: (r) => r.revenue.toFixed(2) },
+        ]);
+        break;
+      }
+      case ReportType.INVENTORY: {
+        const rows = await this.getInventoryReport();
+        csv = toCsv(rows, [
+          { header: 'Product', value: (r) => r.name },
+          { header: 'SKU', value: (r) => r.sku },
+          { header: 'Categories', value: (r) => r.categories.join('; ') },
+          { header: 'Stock', value: (r) => r.stock },
+          { header: 'Low stock threshold', value: (r) => r.lowStockThreshold },
+          { header: 'Price', value: (r) => r.price.toFixed(2) },
+          { header: 'Stock value', value: (r) => r.stockValue.toFixed(2) },
+        ]);
+        break;
+      }
+      case ReportType.ORDERS: {
+        const orders = await prisma.order.findMany({ where: { createdAt: range }, orderBy: { createdAt: 'asc' } });
+        csv = toCsv(orders, [
+          { header: 'Order', value: (o) => o.orderNumber },
+          { header: 'Placed', value: (o) => o.createdAt },
+          { header: 'Customer', value: (o) => o.customerName },
+          { header: 'Phone', value: (o) => o.customerPhone },
+          { header: 'City', value: (o) => o.customerCity },
+          { header: 'Payment method', value: (o) => o.paymentMethod },
+          { header: 'Payment status', value: (o) => o.paymentStatus },
+          { header: 'Delivery status', value: (o) => (o.cancelledAt ? 'CANCELLED' : o.deliveryStatus) },
+          { header: 'Subtotal', value: (o) => Number(o.subtotal).toFixed(2) },
+          { header: 'Discount', value: (o) => Number(o.discount).toFixed(2) },
+          { header: 'Delivery fee', value: (o) => Number(o.deliveryFee).toFixed(2) },
+          { header: 'Total', value: (o) => Number(o.total).toFixed(2) },
+          { header: 'Currency', value: (o) => o.currency },
+        ]);
+        break;
+      }
+      case ReportType.PAYMENTS: {
+        const payments = await prisma.payment.findMany({
+          where: { createdAt: range },
+          include: { order: { select: { orderNumber: true } } },
+          orderBy: { createdAt: 'asc' },
+        });
+        csv = toCsv(payments, [
+          { header: 'Order', value: (p) => p.order.orderNumber },
+          { header: 'Method', value: (p) => p.method },
+          { header: 'Provider', value: (p) => p.provider },
+          { header: 'Status', value: (p) => p.status },
+          { header: 'Amount', value: (p) => Number(p.amount).toFixed(2) },
+          { header: 'Currency', value: (p) => p.currency },
+          { header: 'Transaction ID', value: (p) => p.transactionId },
+          { header: 'Paid at', value: (p) => p.paidAt },
+          { header: 'Refunded at', value: (p) => p.refundedAt },
+          { header: 'Refund reference', value: (p) => p.refundReference },
+        ]);
+        break;
+      }
+      case ReportType.DELIVERIES: {
+        const deliveries = await prisma.delivery.findMany({
+          where: { createdAt: range },
+          include: { order: { select: { orderNumber: true, customerCity: true } }, courier: { select: { name: true } } },
+          orderBy: { createdAt: 'asc' },
+        });
+        csv = toCsv(deliveries, [
+          { header: 'Order', value: (d) => d.order.orderNumber },
+          { header: 'City', value: (d) => d.order.customerCity },
+          { header: 'Status', value: (d) => d.status },
+          { header: 'Courier', value: (d) => d.courier?.name },
+          { header: 'Tracking number', value: (d) => d.trackingNumber },
+          { header: 'Picked up', value: (d) => d.pickedUpAt },
+          { header: 'Delivered', value: (d) => d.deliveredAt },
+        ]);
+        break;
+      }
+      default:
+        throw new NotFoundError('Report');
+    }
+
+    const slug = report.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    return { filename: `${slug}.csv`, csv };
   }
 
   /**

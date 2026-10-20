@@ -22,9 +22,10 @@ type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 export function PaymentScreen() {
   const route = useRoute<RouteProps>();
   const navigation = useNavigation<NavigationProp>();
-  const { orderNumber } = route.params;
+  const { orderId, orderNumber } = route.params;
 
   const [phoneNumber, setPhoneNumber] = useState('');
+  const [transactionId, setTransactionId] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentInitiated, setPaymentInitiated] = useState(false);
   const [checkingStatus, setCheckingStatus] = useState(false);
@@ -38,9 +39,10 @@ export function PaymentScreen() {
     setIsProcessing(true);
 
     try {
-      const response = await api.initiatePayment(orderNumber, phoneNumber);
+      const response = await api.initiatePayment(orderId, phoneNumber);
 
-      if (response.success) {
+      if (response.success && response.data?.transactionId) {
+        setTransactionId(response.data.transactionId);
         setPaymentInitiated(true);
         Alert.alert(
           'Payment Request Sent',
@@ -51,22 +53,23 @@ export function PaymentScreen() {
         Alert.alert('Error', response.message || 'Failed to initiate payment');
       }
     } catch (error) {
-      Alert.alert('Error', 'Something went wrong. Please try again.');
+      Alert.alert('Error', error instanceof Error ? error.message : 'Something went wrong. Please try again.');
     } finally {
       setIsProcessing(false);
     }
   };
 
   const handleCheckStatus = async () => {
+    if (!transactionId) return;
     setCheckingStatus(true);
 
     try {
-      const response = await api.checkPaymentStatus(orderNumber);
+      const response = await api.verifyPayment(transactionId);
 
       if (response.success && response.data) {
-        if (response.data.paymentStatus === 'PAID') {
+        if (response.data.status === 'PAID') {
           navigation.replace('OrderConfirmation', { orderNumber });
-        } else if (response.data.paymentStatus === 'FAILED') {
+        } else if (response.data.status === 'FAILED') {
           Alert.alert(
             'Payment Failed',
             'Your payment was not successful. Please try again.',

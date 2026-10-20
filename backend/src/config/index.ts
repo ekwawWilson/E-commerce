@@ -83,7 +83,15 @@ export const config = {
     clientId: process.env.GOOGLE_CLIENT_ID || '',
     clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
     webClientId: process.env.GOOGLE_WEB_CLIENT_ID || '',
+    // Further OAuth client IDs whose ID tokens we accept (e.g. Android/iOS), comma-separated
+    extraClientIds: (process.env.GOOGLE_EXTRA_CLIENT_IDS || '').split(',').map((id) => id.trim()).filter(Boolean),
   },
+
+  // Public site URL, used in emailed links (password reset, email verification)
+  frontendUrl: (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, ''),
+
+  // Unpaid Mobile Money orders are cancelled (and their stock released) after this long
+  unpaidOrderTtlHours: parseFloat(process.env.UNPAID_ORDER_TTL_HOURS || '24'),
 
   // CORS
   corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:5173',

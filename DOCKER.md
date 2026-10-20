@@ -3,7 +3,7 @@
 > **Status: not available.** This guide describes a Docker Compose setup whose
 > files (`docker-compose.yml`, `docker-compose.prod.yml` and the backend/frontend
 > Dockerfiles) are not in this repository, so none of the commands below work as-is.
-> For local development follow [README.md](README.md); production runs on Render
+> For local development follow [README.md](README.md); production is set up to deploy to Render
 > (backend) and Vercel (frontend), see [DEPLOYMENT_CHECKLIST.md](DEPLOYMENT_CHECKLIST.md).
 
 This document explains how to run the e-commerce application using Docker.

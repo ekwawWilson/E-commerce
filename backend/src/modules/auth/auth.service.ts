@@ -232,9 +232,10 @@ export class AuthService {
 
     const passwordHash = await bcrypt.hash(newPassword, 10);
 
+    // passwordChangedAt logs out other sessions; this one gets a fresh token
     await prisma.admin.update({
       where: { id: adminId },
-      data: { passwordHash },
+      data: { passwordHash, passwordChangedAt: new Date() },
     });
 
     // Create audit log
@@ -247,7 +248,7 @@ export class AuthService {
       },
     });
 
-    return { success: true };
+    return { success: true, token: this.generateToken(admin) };
   }
 
   /**

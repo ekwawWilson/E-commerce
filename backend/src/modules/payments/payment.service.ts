@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import prisma from '../../config/database';
 import config from '../../config';
 import { Payment, PaymentStatus, MobileMoneyProvider } from '@prisma/client';
@@ -25,6 +26,7 @@ interface MomoStatusResult {
 }
 
 export class PaymentService {
+  private momoToken: { value: string; expiresAt: number } | null = null;
   /**
    * Initiate mobile money payment
    */
@@ -44,6 +46,10 @@ export class PaymentService {
 
     if (order.payment.status === PaymentStatus.PAID) {
       throw new AppError('Order has already been paid', 400);
+    }
+
+    if (order.cancelledAt) {
+      throw new AppError('This order has been cancelled', 400);
     }
 
     // Only MTN MoMo has a real integration. Telecel Cash and AirtelTigo Money
@@ -71,9 +77,12 @@ export class PaymentService {
       },
     });
 
-    // Call MTN MoMo API (simplified - in production, use proper SDK)
+    // MTN identifies a request-to-pay by an X-Reference-Id that must be a
+    // UUID; our transactionId travels as the externalId MTN echoes back.
+    const referenceId = randomUUID();
+
     try {
-      const momoResponse = await this.callMomoApi({
+      const momoResponse = await this.callMomoApi(referenceId, {
         amount: String(order.total),
         currency: order.currency,
         externalId: transactionId,
@@ -251,36 +260,38 @@ export class PaymentService {
   /**
    * Call MTN MoMo API (simplified implementation)
    */
-  private async callMomoApi(data: MomoRequestBody): Promise<{ referenceId: string }> {
-    // In production, use proper MTN MoMo SDK
-    // This is a simplified mock implementation
-
+  private async callMomoApi(referenceId: string, data: MomoRequestBody): Promise<{ referenceId: string }> {
     if (config.momo.simulate) {
       // Simulate API call in development
       logger.info('MoMo API call (simulated):', data);
-      return {
-        referenceId: `MOMO-${Date.now()}`,
-      };
+      return { referenceId };
     }
 
-    // Production API call would go here
+    const headers: Record<string, string> = {
+      'Authorization': `Bearer ${await this.getMomoAccessToken()}`,
+      'X-Reference-Id': referenceId,
+      'X-Target-Environment': config.momo.environment,
+      'Ocp-Apim-Subscription-Key': config.momo.subscriptionKey,
+      'Content-Type': 'application/json',
+    };
+
+    // Without a callback URL MTN never calls the webhook and we rely on polling
+    if (config.momo.callbackUrl) {
+      headers['X-Callback-Url'] = config.momo.callbackUrl;
+    }
+
     const response = await fetch(`${config.momo.baseUrl}/collection/v1_0/requesttopay`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${await this.getMomoAccessToken()}`,
-        'X-Reference-Id': data.externalId,
-        'X-Target-Environment': config.momo.environment,
-        'Ocp-Apim-Subscription-Key': config.momo.subscriptionKey,
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify(data),
     });
 
+    // MTN answers 202 Accepted; the outcome arrives later via callback/status
     if (!response.ok) {
       throw new Error(`MoMo API error: ${response.status}`);
     }
 
-    return { referenceId: data.externalId };
+    return { referenceId };
   }
 
   /**
@@ -323,7 +334,11 @@ export class PaymentService {
    * Get MoMo access token
    */
   private async getMomoAccessToken(): Promise<string> {
-    // In production, implement proper token caching
+    // Reuse the token until a minute before it expires
+    if (this.momoToken && this.momoToken.expiresAt > Date.now() + 60_000) {
+      return this.momoToken.value;
+    }
+
     const credentials = Buffer.from(
       `${config.momo.apiUser}:${config.momo.apiKey}`
     ).toString('base64');
@@ -340,7 +355,11 @@ export class PaymentService {
       throw new Error('Failed to get MoMo access token');
     }
 
-    const data = await response.json() as { access_token: string };
+    const data = await response.json() as { access_token: string; expires_in?: number };
+    this.momoToken = {
+      value: data.access_token,
+      expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
+    };
     return data.access_token;
   }
 

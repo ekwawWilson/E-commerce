@@ -31,18 +31,19 @@ interface SupplierAuthState {
   checkAuth: () => Promise<void>;
 }
 
+// Matches the API's /supplier-auth/register body
 interface RegisterData {
-  supplier: {
-    businessName: string;
-    email: string;
-    phone?: string;
-    description?: string;
-  };
-  admin: {
-    email: string;
-    name: string;
-  };
-  password: string;
+  supplierName: string;
+  businessName?: string;
+  email: string;
+  phone: string;
+  description?: string;
+  businessAddress: string;
+  city: string;
+  region: string;
+  ownerName: string;
+  ownerEmail?: string;
+  ownerPassword: string;
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';

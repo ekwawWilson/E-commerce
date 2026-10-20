@@ -30,6 +30,34 @@ export const authLimiter = rateLimit({
 });
 
 /**
+ * Limiter for account creation (customer and supplier sign-up)
+ */
+export const registrationLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 10,
+  message: {
+    success: false,
+    error: 'Too many sign-up attempts, please try again later',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+/**
+ * Limiter for password reset and verification requests, which send email/SMS
+ */
+export const passwordResetLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5,
+  message: {
+    success: false,
+    error: 'Too many requests, please try again later',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+/**
  * Limiter for checkout/payment endpoints
  */
 export const checkoutLimiter = rateLimit({

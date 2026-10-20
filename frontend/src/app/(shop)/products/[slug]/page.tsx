@@ -2,7 +2,8 @@
 
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   ChevronLeft,
   ChevronRight,
@@ -29,6 +30,8 @@ import { ProductImage } from '@/components/ui/product-image';
 import { formatPrice, cn } from '@/lib/utils';
 import { getHighlightSpecs, groupSpecifications, getStockState } from '@/lib/product-specs';
 import { useCartStore } from '@/stores/cart';
+import { useWishlistStore } from '@/stores/wishlist';
+import { getCustomerToken } from '@/stores/customer';
 
 interface ProductPageProps {
   params: { slug: string };
@@ -47,7 +50,6 @@ export default function ProductPage({ params }: ProductPageProps) {
   const [selectedImage, setSelectedImage] = useState(0);
   const [isAdding, setIsAdding] = useState(false);
   const [added, setAdded] = useState(false);
-  const [isWishlisted, setIsWishlisted] = useState(false);
 
   const addItem = useCartStore((state) => state.addItem);
 
@@ -60,6 +62,28 @@ export default function ProductPage({ params }: ProductPageProps) {
   });
 
   const product: Product | null = data?.data || null;
+
+  const router = useRouter();
+  const isWishlisted = useWishlistStore((state) => (product ? state.productIds.has(product.id) : false));
+  const toggleWishlist = useWishlistStore((state) => state.toggle);
+  const ensureWishlistLoaded = useWishlistStore((state) => state.ensureLoaded);
+
+  useEffect(() => {
+    ensureWishlistLoaded();
+  }, [ensureWishlistLoaded]);
+
+  const handleWishlist = async () => {
+    if (!product) return;
+    if (!getCustomerToken()) {
+      router.push(`/login?returnTo=${encodeURIComponent(`/products/${params.slug}`)}`);
+      return;
+    }
+    try {
+      await toggleWishlist(product.id);
+    } catch (err) {
+      console.error('Failed to update wishlist:', err);
+    }
+  };
 
   const handleAddToCart = async () => {
     if (!product || isAdding) return;
@@ -417,7 +441,7 @@ export default function ProductPage({ params }: ProductPageProps) {
                   <Button
                     variant="outline"
                     className="flex-1"
-                    onClick={() => setIsWishlisted((v) => !v)}
+                    onClick={handleWishlist}
                   >
                     <Heart
                       className={cn('mr-2 h-4 w-4', isWishlisted && 'fill-deal text-deal')}

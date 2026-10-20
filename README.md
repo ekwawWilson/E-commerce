@@ -84,7 +84,8 @@ The `.env` files are already configured for local development:
 
 ```bash
 cd backend
-npx prisma migrate dev
+npx prisma migrate deploy   # apply existing migrations
+npx prisma migrate dev      # or, while changing the schema
 npx prisma db seed  # Optional: seed sample data
 ```
 
@@ -126,8 +127,8 @@ npx expo start
 ### 10. Run Tests
 
 ```bash
-cd backend
-npx vitest run
+cd backend && npx vitest run
+cd ../frontend && npx vitest run
 ```
 
 ## Default Admin Credentials

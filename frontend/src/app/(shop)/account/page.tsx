@@ -1,14 +1,13 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   User,
   MapPin,
   Package,
-  CreditCard,
-  Bell,
+  Heart,
   Shield,
   LogOut,
   ChevronRight,
@@ -19,7 +18,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { useCustomerStore } from '@/stores/customer';
+import { useCustomerStore, customerFetch } from '@/stores/customer';
+import { useWishlistStore } from '@/stores/wishlist';
 
 interface MenuItemProps {
   icon: React.ReactNode;
@@ -78,8 +78,19 @@ export default function AccountPage() {
     }
   }, [isLoading, isAuthenticated, router]);
 
+  const [orderCount, setOrderCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    customerFetch('/orders?limit=1')
+      .then((response: any) => setOrderCount(response.pagination?.total ?? 0))
+      .catch(() => setOrderCount(null));
+  }, [isAuthenticated]);
+
+  const resetWishlist = useWishlistStore((state) => state.reset);
+
   const handleLogout = () => {
     logout();
+    resetWishlist();
     router.push('/');
   };
 
@@ -140,7 +151,7 @@ export default function AccountPage() {
                   <p className="text-sm text-muted-foreground">Addresses</p>
                 </div>
                 <div>
-                  <p className="text-2xl font-semibold">0</p>
+                  <p className="text-2xl font-semibold">{orderCount ?? '–'}</p>
                   <p className="text-sm text-muted-foreground">Orders</p>
                 </div>
               </div>
@@ -185,14 +196,14 @@ export default function AccountPage() {
               <MenuItem
                 icon={<Package className="h-5 w-5" />}
                 title="Your Orders"
-                description="Track, return, or buy again"
+                description="Track, pay for, or cancel your orders"
                 href="/account/orders"
               />
               <MenuItem
-                icon={<CreditCard className="h-5 w-5" />}
-                title="Payment Methods"
-                description="Manage your payment options"
-                href="/account/payments"
+                icon={<Heart className="h-5 w-5" />}
+                title="Saved Items"
+                description="Products you've saved for later"
+                href="/account/wishlist"
               />
             </div>
           </div>
@@ -206,16 +217,11 @@ export default function AccountPage() {
             </h3>
             <div className="space-y-3">
               <MenuItem
-                icon={<Bell className="h-5 w-5" />}
-                title="Notifications"
-                description="Manage notification preferences"
-                href="/account/notifications"
-              />
-              <MenuItem
                 icon={<Shield className="h-5 w-5" />}
                 title="Security"
-                description="Password and login settings"
+                description="Password and email/phone verification"
                 href="/account/security"
+                badge={!customer.emailVerified || !customer.phoneVerified ? 'Verify' : undefined}
               />
             </div>
           </div>

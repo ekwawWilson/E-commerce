@@ -33,8 +33,9 @@ export async function getProfile(req: AuthenticatedRequest, res: Response, next:
 export async function changePassword(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   try {
     const { currentPassword, newPassword } = req.body;
-    await authService.changePassword(req.admin!.id, currentPassword, newPassword);
-    return successResponse(res, null, 'Password changed successfully');
+    // Other sessions are signed out; the returned token keeps this one going
+    const result = await authService.changePassword(req.admin!.id, currentPassword, newPassword);
+    return successResponse(res, { token: result.token }, 'Password changed successfully');
   } catch (error) {
     next(error);
   }

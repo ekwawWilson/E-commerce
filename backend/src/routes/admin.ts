@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate, requireAdmin, requireRole } from '../middleware/auth';
+import { authenticate, requireAdmin, requireRole, readOnlyForSupport } from '../middleware/auth';
 
 // Admin module routes
 import { adminProductRoutes } from '../modules/products';
@@ -11,6 +11,7 @@ import { specificationRoutes } from '../modules/specifications';
 import { supplierController } from '../modules/suppliers';
 import { payoutRoutes } from '../modules/payouts';
 import { courierRoutes } from '../modules/delivery';
+import { adminCouponRoutes } from '../modules/coupons/coupon.routes';
 
 const router = Router();
 
@@ -19,16 +20,19 @@ router.use(authenticate);
 router.use(requireAdmin);
 
 // Admin product management
-router.use('/products', adminProductRoutes);
+router.use('/products', readOnlyForSupport, adminProductRoutes);
 
-// Admin order management
+// Admin order management (money-affecting actions are role-checked inside)
 router.use('/orders', adminOrderRoutes);
 
 // Admin category management
-router.use('/categories', adminCategoryRoutes);
+router.use('/categories', readOnlyForSupport, adminCategoryRoutes);
 
 // Admin specification templates
-router.use('/specifications', specificationRoutes);
+router.use('/specifications', readOnlyForSupport, specificationRoutes);
+
+// Coupons
+router.use('/coupons', requireRole('ADMIN', 'SUPER_ADMIN'), adminCouponRoutes);
 
 // Supplier management (admin only)
 router.get('/suppliers', supplierController.getAllSuppliers);
@@ -69,6 +73,6 @@ router.use('/couriers', requireRole('ADMIN', 'SUPER_ADMIN'), courierRoutes);
 router.use('/reports', requireRole('ADMIN', 'SUPER_ADMIN'), reportRoutes);
 
 // Upload routes
-router.use('/upload', uploadRoutes);
+router.use('/upload', readOnlyForSupport, uploadRoutes);
 
 export default router;

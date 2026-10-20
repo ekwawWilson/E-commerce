@@ -25,12 +25,31 @@ export interface UploadOptions {
   };
 }
 
+/**
+ * Upload folders become storage paths (and, in local mode, file system paths),
+ * so only plain segments are allowed: no "..", no leading slash.
+ */
+export function sanitizeFolder(folder: string | undefined): string {
+  const value = (folder || 'products').trim().replace(/^\/+|\/+$/g, '');
+  if (!/^[A-Za-z0-9_-]+(\/[A-Za-z0-9_-]+)*$/.test(value)) {
+    throw new AppError('Invalid upload folder', 400);
+  }
+  return value;
+}
+
+/**
+ * The storage path inside a publicId ("supabase:products/abc.jpg" -> "products/abc.jpg")
+ */
+export function publicIdPath(publicId: string): string {
+  return publicId.replace(/^(local|supabase):/, '');
+}
+
 export class UploadService {
   /**
    * Upload single image to Supabase Storage
    */
   async uploadImage(file: Express.Multer.File, options: UploadOptions = {}): Promise<UploadResult> {
-    const folder = options.folder || 'products';
+    const folder = sanitizeFolder(options.folder);
 
     // Use local storage if Supabase is not configured
     if (!isSupabaseConfigured()) {
@@ -194,9 +213,14 @@ export class UploadService {
     try {
       // Find and delete the file from local storage
       const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
+      // The last segment is the file ID; everything before it is the folder,
+      // which may be nested (e.g. suppliers/<id>)
       const parts = publicId.split('/');
-      const folder = parts[0];
-      const fileId = parts[1];
+      const fileId = parts.pop();
+      const folder = sanitizeFolder(parts.join('/'));
+      if (!fileId || !/^[A-Za-z0-9_-]+$/.test(fileId)) {
+        return false;
+      }
 
       // Try to find and delete file with any extension
       const folderPath = path.join(uploadsDir, folder);

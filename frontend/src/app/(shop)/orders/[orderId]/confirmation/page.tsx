@@ -1,9 +1,11 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
-import { CheckCircle2, Package, Truck, MapPin, Phone, Mail } from 'lucide-react';
+import { CheckCircle2, Package, Truck, MapPin, Phone, Mail, XCircle } from 'lucide-react';
 import { api } from '@/lib/api';
+import { loadCheckoutContact, CheckoutContact } from '@/lib/checkout-contact';
 import { Order } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,19 +15,26 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { formatPrice, getPaymentStatusColor, getDeliveryStatusLabel } from '@/lib/utils';
 
 interface ConfirmationPageProps {
-  params: { orderNumber: string };
+  params: { orderId: string };
 }
 
 export default function OrderConfirmationPage({ params }: ConfirmationPageProps) {
   const { data, isLoading, error } = useQuery({
-    queryKey: ['order', params.orderNumber],
+    queryKey: ['order', params.orderId],
     queryFn: async () => {
-      const response = await api.trackOrder(params.orderNumber);
+      const response = await api.getOrder(params.orderId);
       return response as { success: boolean; data: Order };
     },
   });
 
   const order: Order | null = data?.data || null;
+
+  // Contact details aren't in the public order lookup; show them only in the
+  // browser tab that placed the order.
+  const [contact, setContact] = useState<CheckoutContact | null>(null);
+  useEffect(() => {
+    setContact(loadCheckoutContact(params.orderId));
+  }, [params.orderId]);
 
   if (isLoading) {
     return <ConfirmationSkeleton />;
@@ -49,13 +58,25 @@ export default function OrderConfirmationPage({ params }: ConfirmationPageProps)
     <div className="container py-8">
       {/* Success Header */}
       <div className="mb-8 text-center">
-        <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-green-100">
-          <CheckCircle2 className="h-12 w-12 text-green-600" />
-        </div>
-        <h1 className="text-2xl font-bold text-green-600">Order Confirmed!</h1>
-        <p className="mt-2 text-muted-foreground">
-          Thank you for your order. We&apos;ll send you updates about your delivery.
-        </p>
+        {order.cancelledAt ? (
+          <>
+            <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-red-100">
+              <XCircle className="h-12 w-12 text-red-600" />
+            </div>
+            <h1 className="text-2xl font-bold text-red-600">Order Cancelled</h1>
+            <p className="mt-2 text-muted-foreground">This order has been cancelled.</p>
+          </>
+        ) : (
+          <>
+            <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-green-100">
+              <CheckCircle2 className="h-12 w-12 text-green-600" />
+            </div>
+            <h1 className="text-2xl font-bold text-green-600">Order Confirmed!</h1>
+            <p className="mt-2 text-muted-foreground">
+              Thank you for your order. We&apos;ll send you updates about your delivery.
+            </p>
+          </>
+        )}
         <p className="mt-1 font-mono text-lg font-bold">
           Order #{order.orderNumber}
         </p>
@@ -92,7 +113,7 @@ export default function OrderConfirmationPage({ params }: ConfirmationPageProps)
               </div>
             </div>
 
-            {order.paymentMethod === 'MOMO' && order.paymentStatus === 'PENDING' && (
+            {order.paymentMethod === 'MOMO' && order.paymentStatus === 'PENDING' && !order.cancelledAt && (
               <div className="mt-4 rounded-lg bg-yellow-50 p-4">
                 <p className="text-sm text-yellow-800">
                   Please complete your payment to confirm your order.
@@ -106,39 +127,41 @@ export default function OrderConfirmationPage({ params }: ConfirmationPageProps)
         </Card>
 
         {/* Delivery Info */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Truck className="h-5 w-5" />
-              Delivery Information
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex items-start gap-3">
-              <MapPin className="mt-1 h-4 w-4 text-muted-foreground" />
-              <div>
-                <p className="font-medium">{order.customerName}</p>
-                <p className="text-sm text-muted-foreground">{order.deliveryAddress}</p>
+        {contact && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Truck className="h-5 w-5" />
+                Delivery Information
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex items-start gap-3">
+                <MapPin className="mt-1 h-4 w-4 text-muted-foreground" />
+                <div>
+                  <p className="font-medium">{contact.customerName}</p>
+                  <p className="text-sm text-muted-foreground">{contact.deliveryAddress}</p>
+                </div>
               </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <Phone className="h-4 w-4 text-muted-foreground" />
-              <p>{order.customerPhone}</p>
-            </div>
-            {order.customerEmail && (
               <div className="flex items-center gap-3">
-                <Mail className="h-4 w-4 text-muted-foreground" />
-                <p>{order.customerEmail}</p>
+                <Phone className="h-4 w-4 text-muted-foreground" />
+                <p>{contact.customerPhone}</p>
               </div>
-            )}
-            {order.deliveryNotes && (
-              <div className="mt-2 rounded-lg bg-muted p-3">
-                <p className="text-sm font-medium">Delivery Notes:</p>
-                <p className="text-sm text-muted-foreground">{order.deliveryNotes}</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+              {contact.customerEmail && (
+                <div className="flex items-center gap-3">
+                  <Mail className="h-4 w-4 text-muted-foreground" />
+                  <p>{contact.customerEmail}</p>
+                </div>
+              )}
+              {contact.deliveryNotes && (
+                <div className="mt-2 rounded-lg bg-muted p-3">
+                  <p className="text-sm font-medium">Delivery Notes:</p>
+                  <p className="text-sm text-muted-foreground">{contact.deliveryNotes}</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Order Items */}
         <Card>
@@ -167,6 +190,12 @@ export default function OrderConfirmationPage({ params }: ConfirmationPageProps)
                 <span className="text-muted-foreground">Subtotal</span>
                 <span>{formatPrice(order.subtotal)}</span>
               </div>
+              {Number(order.discount) > 0 && (
+                <div className="flex justify-between text-sm text-green-700">
+                  <span>Discount{order.couponCode ? ` (${order.couponCode})` : ''}</span>
+                  <span>-{formatPrice(order.discount)}</span>
+                </div>
+              )}
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Delivery Fee</span>
                 <span>
@@ -189,7 +218,13 @@ export default function OrderConfirmationPage({ params }: ConfirmationPageProps)
         {/* Actions */}
         <div className="flex flex-col gap-3 sm:flex-row">
           <Button asChild className="flex-1">
-            <Link href={`/track?order=${order.orderNumber}`}>Track Order</Link>
+            <Link
+              href={`/track?order=${encodeURIComponent(order.orderNumber)}${
+                contact?.customerPhone ? `&phone=${encodeURIComponent(contact.customerPhone)}` : ''
+              }`}
+            >
+              Track Order
+            </Link>
           </Button>
           <Button variant="outline" asChild className="flex-1">
             <Link href="/">Continue Shopping</Link>

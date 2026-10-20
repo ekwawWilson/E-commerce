@@ -1,9 +1,9 @@
 import prisma from '../../config/database';
-import { Prisma, SupplierStatus, MobileMoneyProvider } from '@prisma/client';
+import { Prisma, SupplierStatus, MobileMoneyProvider, FulfillmentStatus } from '@prisma/client';
 import { slugify, parsePaginationParams } from '../../utils/helpers';
 import { NotFoundError, AppError } from '../../middleware/errorHandler';
 import bcrypt from 'bcryptjs';
-import { orderService } from '../orders/order.service';
+import { updateItemFulfillment } from '../orders/fulfillment';
 
 export interface SupplierListParams {
   page?: number;
@@ -883,43 +883,11 @@ export class SupplierService {
     trackingNumber?: string;
     notes?: string;
   }) {
-    const orderItem = await prisma.orderItem.findFirst({
-      where: { id: orderItemId, supplierId },
+    return updateItemFulfillment(supplierId, orderItemId, {
+      status: data.fulfillmentStatus as FulfillmentStatus,
+      trackingNumber: data.trackingNumber,
+      notes: data.notes,
     });
-
-    if (!orderItem) {
-      throw new NotFoundError('Order item');
-    }
-
-    const updateData: any = {
-      fulfillmentStatus: data.fulfillmentStatus,
-    };
-
-    if (data.trackingNumber) {
-      updateData.trackingNumber = data.trackingNumber;
-    }
-
-    if (data.notes) {
-      updateData.notes = data.notes;
-    }
-
-    // Set timestamps based on status
-    if (data.fulfillmentStatus === 'CONFIRMED') {
-      updateData.fulfilledAt = new Date();
-    } else if (data.fulfillmentStatus === 'SHIPPED') {
-      updateData.shippedAt = new Date();
-    } else if (data.fulfillmentStatus === 'DELIVERED') {
-      updateData.deliveredAt = new Date();
-    }
-
-    const updated = await prisma.orderItem.update({
-      where: { id: orderItemId },
-      data: updateData,
-    });
-
-    await orderService.reconcileDeliveryStatus(orderItem.orderId);
-
-    return updated;
   }
 }
 

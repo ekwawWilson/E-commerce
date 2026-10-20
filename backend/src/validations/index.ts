@@ -9,3 +9,5 @@ export * from './category';
 export * from './report';
 export * from './upload';
 export * from './courier';
+export * from './customer';
+export * from './coupon';

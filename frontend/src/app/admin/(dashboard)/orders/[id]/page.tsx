@@ -18,6 +18,16 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Select,
@@ -33,12 +43,20 @@ import { cn } from '@/lib/utils';
 
 const statusColors: Record<string, string> = {
   pending: 'bg-yellow-100 text-yellow-800',
-  confirmed: 'bg-blue-100 text-blue-800',
-  processing: 'bg-purple-100 text-purple-800',
-  shipped: 'bg-indigo-100 text-indigo-800',
+  picked_up: 'bg-blue-100 text-blue-800',
+  in_transit: 'bg-indigo-100 text-indigo-800',
   delivered: 'bg-green-100 text-green-800',
   cancelled: 'bg-red-100 text-red-800',
 };
+
+// The API's delivery statuses. Cancelling is a separate action because it
+// also returns stock and closes the payment.
+const DELIVERY_STATUSES = [
+  { value: 'PENDING', label: 'Pending' },
+  { value: 'PICKED_UP', label: 'Picked up' },
+  { value: 'IN_TRANSIT', label: 'In transit' },
+  { value: 'DELIVERED', label: 'Delivered' },
+];
 
 const paymentStatusColors: Record<string, string> = {
   pending: 'bg-yellow-100 text-yellow-800',
@@ -57,37 +75,60 @@ export default function OrderDetailPage() {
   const [order, setOrder] = useState<Order | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [dialog, setDialog] = useState<'cancel' | 'refund' | null>(null);
+  const [reason, setReason] = useState('');
+  const [reference, setReference] = useState('');
 
-  useEffect(() => {
-    const fetchOrder = async () => {
-      try {
-        const response = await adminApi.getOrder(orderId);
-        if (response.success && response.data) {
-          setOrder(response.data);
-        }
-      } catch (error) {
-        console.error('Failed to fetch order:', error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    fetchOrder();
-  }, [orderId]);
-
-  const handleStatusUpdate = async (newStatus: string) => {
-    if (!order) return;
-
-    setIsUpdating(true);
+  const fetchOrder = async () => {
     try {
-      const response = await adminApi.updateOrderStatus(orderId, newStatus);
+      const response = await adminApi.getOrder(orderId);
       if (response.success && response.data) {
         setOrder(response.data);
       }
     } catch (error) {
-      console.error('Failed to update status:', error);
+      console.error('Failed to fetch order:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchOrder();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderId]);
+
+  // Run an order action, then reload the full order (responses differ in shape)
+  const runAction = async (action: () => Promise<unknown>) => {
+    setIsUpdating(true);
+    setActionError(null);
+    try {
+      await action();
+      await fetchOrder();
+      return true;
+    } catch (error: any) {
+      setActionError(error.message || 'The update failed');
+      return false;
     } finally {
       setIsUpdating(false);
+    }
+  };
+
+  const handleStatusUpdate = (newStatus: string) =>
+    runAction(() => adminApi.updateOrderStatus(orderId, newStatus));
+
+  const handleMarkPaid = () => runAction(() => adminApi.updatePaymentStatus(orderId, 'PAID'));
+
+  const handleDialogSubmit = async () => {
+    const ok = await runAction(() =>
+      dialog === 'cancel'
+        ? adminApi.cancelOrder(orderId, reason.trim())
+        : adminApi.recordRefund(orderId, reason.trim(), reference.trim())
+    );
+    if (ok) {
+      setDialog(null);
+      setReason('');
+      setReference('');
     }
   };
 
@@ -312,16 +353,16 @@ export default function OrderDetailPage() {
                   <Badge
                     className={cn(
                       'capitalize',
-                      statusColors[order.deliveryStatus]
+                      statusColors[order.cancelledAt ? 'cancelled' : order.deliveryStatus.toLowerCase()]
                     )}
                     variant="secondary"
                   >
-                    {order.deliveryStatus}
+                    {order.cancelledAt ? 'CANCELLED' : order.deliveryStatus.replace('_', ' ')}
                   </Badge>
                   <Badge
                     className={cn(
                       'capitalize',
-                      paymentStatusColors[order.paymentStatus]
+                      paymentStatusColors[order.paymentStatus.toLowerCase()]
                     )}
                     variant="secondary"
                   >
@@ -329,23 +370,57 @@ export default function OrderDetailPage() {
                   </Badge>
                 </div>
 
-                <Select
-                  value={order.deliveryStatus}
-                  onValueChange={handleStatusUpdate}
-                  disabled={isUpdating || order.deliveryStatus === 'CANCELLED'}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Change status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="pending">Pending</SelectItem>
-                    <SelectItem value="confirmed">Confirmed</SelectItem>
-                    <SelectItem value="processing">Processing</SelectItem>
-                    <SelectItem value="shipped">Shipped</SelectItem>
-                    <SelectItem value="delivered">Delivered</SelectItem>
-                    <SelectItem value="cancelled">Cancelled</SelectItem>
-                  </SelectContent>
-                </Select>
+                {order.cancelledAt ? (
+                  <div className="rounded-md bg-red-50 p-3 text-sm text-red-800">
+                    Cancelled {format(new Date(order.cancelledAt), 'PPp')}
+                    {order.cancelReason && <>: {order.cancelReason}</>}
+                    {order.paymentStatus === 'PAID' && (
+                      <p className="mt-1 font-medium">The customer paid — a refund is due.</p>
+                    )}
+                  </div>
+                ) : (
+                  <Select
+                    value={order.deliveryStatus}
+                    onValueChange={handleStatusUpdate}
+                    disabled={isUpdating}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Change status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DELIVERY_STATUSES.map((s) => (
+                        <SelectItem key={s.value} value={s.value}>
+                          {s.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+
+                <div className="flex flex-col gap-2">
+                  {order.paymentMethod === 'COD' && order.paymentStatus === 'PENDING' && !order.cancelledAt && (
+                    <Button variant="outline" onClick={handleMarkPaid} disabled={isUpdating}>
+                      Mark cash received
+                    </Button>
+                  )}
+                  {!order.cancelledAt && (
+                    <Button
+                      variant="outline"
+                      className="text-destructive"
+                      onClick={() => setDialog('cancel')}
+                      disabled={isUpdating}
+                    >
+                      Cancel order
+                    </Button>
+                  )}
+                  {order.cancelledAt && order.paymentStatus === 'PAID' && (
+                    <Button onClick={() => setDialog('refund')} disabled={isUpdating}>
+                      Record refund
+                    </Button>
+                  )}
+                </div>
+
+                {actionError && <p className="text-sm text-destructive">{actionError}</p>}
 
                 {isUpdating && (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -440,6 +515,46 @@ export default function OrderDetailPage() {
           </div>
         </div>
       </div>
+
+      <Dialog open={dialog !== null} onOpenChange={(open) => !open && setDialog(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{dialog === 'cancel' ? 'Cancel this order?' : 'Record refund'}</DialogTitle>
+            <DialogDescription>
+              {dialog === 'cancel'
+                ? 'Unshipped items are cancelled and their stock is returned. The customer is notified.'
+                : 'Send the money first (e.g. a MoMo transfer), then record it here.'}
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            placeholder={dialog === 'cancel' ? 'Reason for cancelling' : 'Reason for the refund'}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={3}
+          />
+          {dialog === 'refund' && (
+            <Input
+              placeholder="Transfer reference (optional)"
+              value={reference}
+              onChange={(e) => setReference(e.target.value)}
+            />
+          )}
+          {actionError && <p className="text-sm text-destructive">{actionError}</p>}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialog(null)}>
+              Close
+            </Button>
+            <Button
+              variant={dialog === 'cancel' ? 'destructive' : 'default'}
+              onClick={handleDialogSubmit}
+              disabled={isUpdating || !reason.trim()}
+            >
+              {isUpdating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {dialog === 'cancel' ? 'Cancel order' : 'Record refund'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Loader2, CheckCircle, XCircle, Clock, Phone } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -8,43 +8,96 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { api } from '@/lib/api/client';
+import { loadCheckoutContact } from '@/lib/checkout-contact';
+import { formatPrice } from '@/lib/utils';
 
 type PaymentStatus = 'pending' | 'processing' | 'success' | 'failed';
+
+const POLL_INTERVAL_MS = 5000;
+const MAX_POLLS = 30;
 
 export default function PaymentPage() {
   const params = useParams();
   const router = useRouter();
-  const orderNumber = params.orderNumber as string;
+  const orderId = params.orderId as string;
 
   const [status, setStatus] = useState<PaymentStatus>('pending');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
-  const [orderTotal, setOrderTotal] = useState(0);
+  const [orderNumber, setOrderNumber] = useState('');
+  const [orderTotal, setOrderTotal] = useState<number | null>(null);
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    const contact = loadCheckoutContact(orderId);
+    if (contact?.customerPhone) {
+      setPhoneNumber(contact.customerPhone);
+    }
+
     const fetchOrder = async () => {
       try {
-        const response = await api.trackOrder(orderNumber) as { success: boolean; data: { total: number; paymentStatus: string } };
-        if (response.success && response.data) {
-          setOrderTotal(response.data.total);
-          if (response.data.paymentStatus === 'PAID') {
-            router.push(`/orders/${orderNumber}/confirmation`);
-          }
+        const response = await api.getOrder(orderId);
+        const order = response.data;
+        setOrderNumber(order.orderNumber);
+        setOrderTotal(Number(order.total));
+        if (order.paymentStatus === 'PAID') {
+          router.replace(`/orders/${orderId}/confirmation`);
+        } else if (order.cancelledAt) {
+          setStatus('failed');
+          setError('This order has been cancelled.');
         }
-      } catch (err) {
-        console.error('Failed to fetch order:', err);
+      } catch {
+        setStatus('failed');
+        setError("We couldn't find this order.");
       }
     };
 
     fetchOrder();
-  }, [orderNumber, router]);
+    return () => {
+      if (pollTimer.current) clearTimeout(pollTimer.current);
+    };
+  }, [orderId, router]);
+
+  const pollPaymentStatus = (transactionId: string) => {
+    let attempts = 0;
+
+    const checkStatus = async () => {
+      try {
+        const response = await api.verifyPayment(transactionId);
+        const paymentStatus = response.data?.status;
+
+        if (paymentStatus === 'PAID') {
+          setStatus('success');
+          pollTimer.current = setTimeout(() => router.push(`/orders/${orderId}/confirmation`), 2000);
+          return;
+        }
+        if (paymentStatus === 'FAILED') {
+          setStatus('failed');
+          setError('Payment was declined. Please try again.');
+          return;
+        }
+      } catch {
+        // Network blips shouldn't end the wait; keep polling until the limit
+      }
+
+      attempts++;
+      if (attempts < MAX_POLLS) {
+        pollTimer.current = setTimeout(checkStatus, POLL_INTERVAL_MS);
+      } else {
+        setStatus('failed');
+        setError("We didn't receive your approval in time. Please check your phone and try again.");
+      }
+    };
+
+    checkStatus();
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
-    if (!phoneNumber || phoneNumber.length < 10) {
+    if (!phoneNumber || phoneNumber.replace(/\D/g, '').length < 9) {
       setError('Please enter a valid phone number');
       return;
     }
@@ -53,59 +106,21 @@ export default function PaymentPage() {
     setStatus('processing');
 
     try {
-      const response = await api.initiatePayment(orderNumber, phoneNumber) as { success: boolean; error?: string };
+      const response = await api.initiatePayment(orderId, phoneNumber);
+      const transactionId = response.data?.transactionId;
 
-      if (response.success) {
-        // Poll for payment status
-        pollPaymentStatus();
+      if (response.success && transactionId) {
+        pollPaymentStatus(transactionId);
       } else {
         setStatus('failed');
-        setError(response.error || 'Payment initiation failed');
+        setError(response.message || 'Payment initiation failed');
       }
-    } catch (err) {
+    } catch (err: any) {
       setStatus('failed');
-      setError('Failed to initiate payment. Please try again.');
+      setError(err.message || 'Failed to initiate payment. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
-  };
-
-  const pollPaymentStatus = async () => {
-    let attempts = 0;
-    const maxAttempts = 30;
-
-    const checkStatus = async () => {
-      try {
-        const response = await api.checkPaymentStatus(orderNumber) as { success: boolean; data?: { status: string } };
-
-        if (response.success && response.data) {
-          if (response.data.status === 'PAID') {
-            setStatus('success');
-            setTimeout(() => {
-              router.push(`/orders/${orderNumber}/confirmation`);
-            }, 2000);
-            return;
-          } else if (response.data.status === 'FAILED') {
-            setStatus('failed');
-            setError('Payment was declined. Please try again.');
-            return;
-          }
-        }
-
-        attempts++;
-        if (attempts < maxAttempts) {
-          setTimeout(checkStatus, 5000);
-        } else {
-          setStatus('failed');
-          setError('Payment timeout. Please check your phone for the prompt.');
-        }
-      } catch (err) {
-        setStatus('failed');
-        setError('Failed to verify payment status.');
-      }
-    };
-
-    checkStatus();
   };
 
   return (
@@ -113,22 +128,22 @@ export default function PaymentPage() {
       <Card>
         <CardHeader className="text-center">
           <CardTitle>Mobile Money Payment</CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Order: {orderNumber}
-          </p>
+          {orderNumber && (
+            <p className="text-sm text-muted-foreground">Order: {orderNumber}</p>
+          )}
         </CardHeader>
         <CardContent>
           {status === 'pending' && (
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="rounded-lg bg-muted p-4 text-center">
                 <p className="text-2xl font-bold">
-                  GHS {orderTotal.toLocaleString()}
+                  {orderTotal === null ? '…' : formatPrice(orderTotal)}
                 </p>
                 <p className="text-sm text-muted-foreground">Amount to pay</p>
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="phone">Mobile Money Number</Label>
+                <Label htmlFor="phone">MTN Mobile Money Number</Label>
                 <div className="relative">
                   <Phone className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
@@ -148,7 +163,7 @@ export default function PaymentPage() {
                 </div>
               )}
 
-              <Button type="submit" className="w-full" disabled={isSubmitting}>
+              <Button type="submit" className="w-full" disabled={isSubmitting || orderTotal === null}>
                 {isSubmitting ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />

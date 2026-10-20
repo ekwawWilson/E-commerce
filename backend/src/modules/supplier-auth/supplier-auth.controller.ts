@@ -99,10 +99,11 @@ export class SupplierAuthController {
         });
       }
 
-      await supplierAuthService.changePassword(supplierAdminId, currentPassword, newPassword);
+      const result = await supplierAuthService.changePassword(supplierAdminId, currentPassword, newPassword);
 
       res.json({
         success: true,
+        data: { token: result.token },
         message: 'Password changed successfully',
       });
     } catch (error) {

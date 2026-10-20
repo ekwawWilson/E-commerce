@@ -2,8 +2,57 @@ import nodemailer from 'nodemailer';
 import config from '../../config';
 import logger from '../../utils/logger';
 
+const escapeHtml = (value: unknown) =>
+  String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+
+// A single-call-to-action email (password reset, email verification)
+const actionEmail = (title: string, intro: string, buttonLabel: string, link: string, footnote: string) => `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      </head>
+      <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f5f5f5;">
+        <div style="background-color: #1A1A2E; padding: 20px; text-align: center; border-radius: 8px 8px 0 0;">
+          <h1 style="color: #ffffff; margin: 0;">${escapeHtml(title)}</h1>
+        </div>
+        <div style="background-color: #ffffff; padding: 30px; border-radius: 0 0 8px 8px;">
+          <p style="color: #333; font-size: 16px;">${intro}</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${escapeHtml(link)}" style="display: inline-block; background-color: #1A1A2E; color: #ffffff; padding: 12px 30px; text-decoration: none; border-radius: 4px; font-size: 14px; font-weight: 600;">${escapeHtml(buttonLabel)}</a>
+          </div>
+          <p style="color: #666; font-size: 13px;">Or paste this link into your browser:<br><span style="word-break: break-all;">${escapeHtml(link)}</span></p>
+          <p style="color: #999; font-size: 12px; margin-top: 30px;">${escapeHtml(footnote)}</p>
+        </div>
+      </body>
+      </html>
+    `;
+
 // Email templates
 const templates = {
+  password_reset: (data: Record<string, any>) => ({
+    subject: 'Reset your password',
+    html: actionEmail(
+      'Reset your password',
+      `Hi <strong>${escapeHtml(data.name)}</strong>, we received a request to reset your password. This link works once and expires in 1 hour.`,
+      'Reset password',
+      data.link,
+      "If you didn't ask to reset your password, you can ignore this email; your password won't change."
+    ),
+  }),
+
+  email_verification: (data: Record<string, any>) => ({
+    subject: 'Verify your email address',
+    html: actionEmail(
+      'Verify your email',
+      `Hi <strong>${escapeHtml(data.name)}</strong>, please confirm this is your email address. This link expires in 24 hours.`,
+      'Verify email',
+      data.link,
+      "If you didn't create an account, you can ignore this email."
+    ),
+  }),
+
   order_confirmation: (data: Record<string, any>) => ({
     subject: `Order Confirmation - ${data.orderNumber}`,
     html: `
@@ -208,7 +257,13 @@ const createTransporter = () => {
   });
 };
 
-export type EmailTemplate = 'order_confirmation' | 'payment_success' | 'delivery_update' | 'welcome';
+export type EmailTemplate =
+  | 'order_confirmation'
+  | 'payment_success'
+  | 'delivery_update'
+  | 'welcome'
+  | 'password_reset'
+  | 'email_verification';
 
 export interface SendEmailOptions {
   to: string;
@@ -362,4 +417,18 @@ export async function sendWelcomeEmail(customer: {
       appUrl: process.env.FRONTEND_URL || 'https://ecommerce.com',
     },
   });
+}
+
+/**
+ * Send a password reset link
+ */
+export async function sendPasswordResetEmail(to: string, name: string, link: string): Promise<boolean> {
+  return sendEmail({ to, template: 'password_reset', data: { name, link } });
+}
+
+/**
+ * Send an email verification link
+ */
+export async function sendEmailVerificationEmail(to: string, name: string, link: string): Promise<boolean> {
+  return sendEmail({ to, template: 'email_verification', data: { name, link } });
 }

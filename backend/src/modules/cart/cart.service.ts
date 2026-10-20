@@ -38,7 +38,15 @@ export interface CartWithItems {
         id: string;
         businessName: string;
         slug: string;
+        status: string;
       } | null;
+      deliveryZones: Array<{
+        zoneName: string;
+        zoneType: string;
+        region: string | null;
+        deliveryFee: Decimal | null;
+        available: boolean;
+      }>;
     };
   }>;
   createdAt: Date;
@@ -107,6 +115,16 @@ export class CartService {
                     id: true,
                     businessName: true,
                     slug: true,
+                    status: true,
+                  },
+                },
+                deliveryZones: {
+                  select: {
+                    zoneName: true,
+                    zoneType: true,
+                    region: true,
+                    deliveryFee: true,
+                    available: true,
                   },
                 },
               },
@@ -164,6 +182,16 @@ export class CartService {
 
     if (!product.active) {
       throw new AppError('Product is not available', 400);
+    }
+
+    if (product.supplierId) {
+      const supplier = await prisma.supplier.findUnique({
+        where: { id: product.supplierId },
+        select: { status: true },
+      });
+      if (supplier?.status !== 'ACTIVE') {
+        throw new AppError('Product is not available', 400);
+      }
     }
 
     // Resolve the variant. Callers that don't specify one (simple products,
@@ -451,7 +479,9 @@ export class CartService {
         ? `${item.snapshotName} (${item.snapshotVariantName})`
         : item.snapshotName;
 
-      if (!item.product.active || !item.variant.active) {
+      const supplierInactive = !!item.product.supplier && item.product.supplier.status !== 'ACTIVE';
+
+      if (!item.product.active || !item.variant.active || supplierInactive) {
         errors.push(`${label} is no longer available`);
       }
 
@@ -465,6 +495,34 @@ export class CartService {
 
     if (errors.length > 0) {
       throw new AppError(`Cart validation failed: ${errors.join('; ')}`, 400);
+    }
+
+    // The cart holds the price from when each item was added. If any price has
+    // changed since, update the cart and stop so the customer sees the new total
+    // before paying, rather than buying at a stale (e.g. ended sale) price.
+    const repriced = cart.items.filter((item) => !item.variant.price.equals(item.snapshotPrice));
+
+    if (repriced.length > 0) {
+      await prisma.$transaction(
+        repriced.map((item) =>
+          prisma.cartItem.update({
+            where: { id: item.id },
+            data: { snapshotPrice: item.variant.price },
+          })
+        )
+      );
+
+      const changes = repriced.map((item) => {
+        const label = item.snapshotVariantName
+          ? `${item.snapshotName} (${item.snapshotVariantName})`
+          : item.snapshotName;
+        return `${label}: ${Number(item.snapshotPrice).toFixed(2)} → ${Number(item.variant.price).toFixed(2)}`;
+      });
+
+      throw new AppError(
+        `Prices in your cart have changed. Please review your cart before checking out. ${changes.join('; ')}`,
+        409
+      );
     }
 
     return cart;

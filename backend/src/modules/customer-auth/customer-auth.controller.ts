@@ -48,22 +48,8 @@ export async function login(req: Request, res: Response, next: NextFunction) {
  */
 export async function googleAuth(req: Request, res: Response, next: NextFunction) {
   try {
-    const { idToken, email, name, profileImage, googleId } = req.body;
-
-    if (!idToken || !email || !name || !googleId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Missing required fields: idToken, email, name, googleId',
-      });
-    }
-
-    const result = await customerAuthService.googleAuth({
-      idToken,
-      email,
-      name,
-      profileImage,
-      googleId,
-    });
+    // Only the ID token is used; any email/name/googleId in the body is ignored
+    const result = await customerAuthService.googleAuth(req.body.idToken);
 
     // If guest cart ID provided, link it to customer
     const guestCartId = req.headers['x-cart-id'] as string;
@@ -107,8 +93,9 @@ export async function updateProfile(req: CustomerRequest, res: Response, next: N
 export async function changePassword(req: CustomerRequest, res: Response, next: NextFunction) {
   try {
     const { currentPassword, newPassword } = req.body;
-    await customerAuthService.changePassword(req.customer!.id, currentPassword, newPassword);
-    return successResponse(res, null, 'Password changed successfully');
+    // Other sessions are signed out; the returned token keeps this one going
+    const result = await customerAuthService.changePassword(req.customer!.id, currentPassword, newPassword);
+    return successResponse(res, { token: result.token }, 'Password changed successfully');
   } catch (error) {
     next(error);
   }
@@ -188,6 +175,86 @@ export async function getOrder(req: CustomerRequest, res: Response, next: NextFu
   try {
     const order = await customerAuthService.getOrder(req.customer!.id, req.params.orderId);
     return successResponse(res, order);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Cancel one of the customer's orders
+ */
+export async function cancelOrder(req: CustomerRequest, res: Response, next: NextFunction) {
+  try {
+    const result = await customerAuthService.cancelOrder(req.customer!.id, req.params.orderId, req.body.reason);
+    return successResponse(res, result, 'Order cancelled');
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Wishlist
+ */
+export async function getWishlist(req: CustomerRequest, res: Response, next: NextFunction) {
+  try {
+    return successResponse(res, await customerAuthService.getWishlist(req.customer!.id));
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function addToWishlist(req: CustomerRequest, res: Response, next: NextFunction) {
+  try {
+    const result = await customerAuthService.addToWishlist(req.customer!.id, req.body.productId);
+    return successResponse(res, result, 'Added to wishlist', 201);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function removeFromWishlist(req: CustomerRequest, res: Response, next: NextFunction) {
+  try {
+    const result = await customerAuthService.removeFromWishlist(req.customer!.id, req.params.productId);
+    return successResponse(res, result, 'Removed from wishlist');
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Email & phone verification
+ */
+export async function requestEmailVerification(req: CustomerRequest, res: Response, next: NextFunction) {
+  try {
+    const result = await customerAuthService.requestEmailVerification(req.customer!.id);
+    return successResponse(res, result, 'Verification email sent');
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function confirmEmail(req: Request, res: Response, next: NextFunction) {
+  try {
+    const result = await customerAuthService.confirmEmail(req.body.token);
+    return successResponse(res, result, 'Email verified');
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function requestPhoneVerification(req: CustomerRequest, res: Response, next: NextFunction) {
+  try {
+    const result = await customerAuthService.requestPhoneVerification(req.customer!.id);
+    return successResponse(res, result, 'Verification code sent');
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function confirmPhone(req: CustomerRequest, res: Response, next: NextFunction) {
+  try {
+    const result = await customerAuthService.confirmPhone(req.customer!.id, req.body.code);
+    return successResponse(res, result, 'Phone number verified');
   } catch (error) {
     next(error);
   }

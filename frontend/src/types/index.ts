@@ -155,8 +155,11 @@ export interface Order {
   subtotal: number;
   deliveryFee: number;
   discount: number;
+  couponCode?: string | null;
   total: number;
   currency: string;
+  cancelledAt?: string | null;
+  cancelReason?: string | null;
   itemsSnapshot: OrderItem[];
   invoiceUrl: string | null;
   deliveryNoteUrl: string | null;

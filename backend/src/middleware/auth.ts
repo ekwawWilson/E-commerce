@@ -11,6 +11,17 @@ interface JwtPayload {
   adminId: string;
   email: string;
   role: AdminRole;
+  iat?: number;
+}
+
+/**
+ * Whether a token predates the account's last password change, in which case
+ * it must no longer work (password reset should log out every old session).
+ * One second of slack because `iat` is in whole seconds.
+ */
+export function issuedBeforePasswordChange(iat: number | undefined, passwordChangedAt: Date | null | undefined) {
+  if (!passwordChangedAt || !iat) return false;
+  return iat * 1000 < passwordChangedAt.getTime() - 1000;
 }
 
 /**
@@ -26,6 +37,7 @@ interface CustomerJwtPayload {
   customerId: string;
   email: string;
   phone: string;
+  iat?: number;
 }
 
 // Extended request type with customer
@@ -69,6 +81,10 @@ export async function authenticate(
       return unauthorizedResponse(res, 'Invalid or inactive account');
     }
 
+    if (issuedBeforePasswordChange(decoded.iat, admin.passwordChangedAt)) {
+      return unauthorizedResponse(res, 'Session expired, please sign in again');
+    }
+
     req.admin = admin;
     next();
   } catch (error) {
@@ -97,6 +113,17 @@ export function requireRole(...roles: AdminRole[]) {
 
     next();
   };
+}
+
+/**
+ * SUPPORT staff can look but not change: any request other than a read needs
+ * ADMIN or SUPER_ADMIN.
+ */
+export function readOnlyForSupport(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  if (req.method !== 'GET' && req.method !== 'HEAD' && req.admin?.role === 'SUPPORT') {
+    return forbiddenResponse(res, 'Support staff have read-only access here');
+  }
+  next();
 }
 
 /**
@@ -140,7 +167,7 @@ export async function optionalAuth(
       where: { id: decoded.adminId },
     });
 
-    if (admin && admin.active) {
+    if (admin && admin.active && !issuedBeforePasswordChange(decoded.iat, admin.passwordChangedAt)) {
       req.admin = admin;
     }
 
@@ -183,11 +210,16 @@ export async function authenticateCustomer(
         phone: true,
         name: true,
         active: true,
+        passwordChangedAt: true,
       },
     });
 
     if (!customer || !customer.active) {
       return unauthorizedResponse(res, 'Invalid or inactive account');
+    }
+
+    if (issuedBeforePasswordChange(decoded.iat, customer.passwordChangedAt)) {
+      return unauthorizedResponse(res, 'Session expired, please sign in again');
     }
 
     req.customer = {
@@ -241,10 +273,11 @@ export async function optionalCustomerAuth(
         phone: true,
         name: true,
         active: true,
+        passwordChangedAt: true,
       },
     });
 
-    if (customer && customer.active) {
+    if (customer && customer.active && !issuedBeforePasswordChange(decoded.iat, customer.passwordChangedAt)) {
       req.customer = {
         id: customer.id,
         email: customer.email,

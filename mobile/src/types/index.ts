@@ -240,7 +240,7 @@ export type RootStackParamList = {
   ProductDetail: { slug: string };
   CategoryProducts: { categorySlug: string; categoryName: string };
   Checkout: undefined;
-  Payment: { orderNumber: string };
+  Payment: { orderId: string; orderNumber: string };
   OrderConfirmation: { orderNumber: string };
   // Customer auth screens
   Login: { returnTo?: string };

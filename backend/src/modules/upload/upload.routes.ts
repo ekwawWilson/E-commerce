@@ -1,39 +1,11 @@
-import { Router, Request } from 'express';
-import multer, { FileFilterCallback } from 'multer';
+import { Router } from 'express';
 import * as uploadController from './upload.controller';
 import { authenticate } from '../../middleware/auth';
 import { uploadLimiter } from '../../middleware/rateLimit';
 import config from '../../config';
+import { imageUpload as upload } from './multer';
 
 const router = Router();
-
-// File filter for JPEG/JPG and PNG images only
-const imageFileFilter = (
-  req: Request,
-  file: Express.Multer.File,
-  cb: FileFilterCallback
-) => {
-  const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png'];
-  const allowedExtensions = ['.jpg', '.jpeg', '.png'];
-
-  const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
-
-  if (allowedMimeTypes.includes(file.mimetype) && allowedExtensions.includes(ext)) {
-    cb(null, true);
-  } else {
-    cb(new Error('Only JPEG and PNG images are allowed'));
-  }
-};
-
-// Configure multer for memory storage
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: config.maxFileSize,
-    files: config.maxImagesPerProduct,
-  },
-  fileFilter: imageFileFilter,
-});
 
 // All routes require authentication
 router.use(authenticate);

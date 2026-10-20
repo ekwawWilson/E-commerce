@@ -118,29 +118,12 @@ export default function OrdersPage() {
   const exportToPdf = async () => {
     setIsExporting(true);
     try {
-      // Generate PDF report using current filters
-      const params: Record<string, string> = {};
-      if (startDate) params.startDate = format(startDate, 'yyyy-MM-dd');
-      if (endDate) params.endDate = format(endDate, 'yyyy-MM-dd');
-      if (supplierFilter !== 'all') params.supplierId = supplierFilter;
-      if (statusFilter !== 'all') params.deliveryStatus = statusFilter;
-      if (paymentStatusFilter !== 'all') params.paymentStatus = paymentStatusFilter;
-
-      const response = await adminApi.downloadReport('orders', params);
-
-      if (response.success && response.data?.url) {
-        // Open the PDF in a new tab
-        window.open(response.data.url, '_blank');
-      } else {
-        // Fallback: generate a simple CSV download
-        const csvContent = generateCsvReport();
-        downloadCsv(csvContent, `orders-report-${format(new Date(), 'yyyy-MM-dd')}.csv`);
-      }
-    } catch (error) {
-      console.error('Failed to export report:', error);
-      // Fallback: generate a simple CSV download
+      // Export exactly the filtered list on screen. (This used to call a
+      // report endpoint that doesn't exist and always fell back to this.)
       const csvContent = generateCsvReport();
       downloadCsv(csvContent, `orders-report-${format(new Date(), 'yyyy-MM-dd')}.csv`);
+    } catch (error) {
+      console.error('Failed to export report:', error);
     } finally {
       setIsExporting(false);
     }

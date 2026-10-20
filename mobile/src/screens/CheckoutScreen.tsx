@@ -180,7 +180,7 @@ export function CheckoutScreen() {
         await clearCart();
 
         if (paymentMethod === 'MOMO') {
-          navigation.replace('Payment', { orderNumber: response.data.orderNumber });
+          navigation.replace('Payment', { orderId: response.data.id, orderNumber: response.data.orderNumber });
         } else {
           navigation.replace('OrderConfirmation', { orderNumber: response.data.orderNumber });
         }

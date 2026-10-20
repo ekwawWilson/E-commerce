@@ -21,6 +21,9 @@ export default function SupplierRegisterPage() {
     businessEmail: '',
     businessPhone: '',
     description: '',
+    businessAddress: '',
+    city: '',
+    region: '',
     adminName: '',
     adminEmail: '',
     password: '',
@@ -46,18 +49,20 @@ export default function SupplierRegisterPage() {
     }
 
     try {
+      // The API takes a flat body; it used to receive nested supplier/admin
+      // objects, which it rejected, so supplier sign-up never worked.
       await register({
-        supplier: {
-          businessName: formData.businessName,
-          email: formData.businessEmail,
-          phone: formData.businessPhone,
-          description: formData.description,
-        },
-        admin: {
-          email: formData.adminEmail,
-          name: formData.adminName,
-        },
-        password: formData.password,
+        supplierName: formData.businessName.trim(),
+        businessName: formData.businessName.trim(),
+        email: formData.businessEmail.trim(),
+        phone: formData.businessPhone.trim(),
+        description: formData.description.trim() || undefined,
+        businessAddress: formData.businessAddress.trim(),
+        city: formData.city.trim(),
+        region: formData.region.trim(),
+        ownerName: formData.adminName.trim(),
+        ownerEmail: formData.adminEmail.trim() || undefined,
+        ownerPassword: formData.password,
       });
       setSuccess(true);
     } catch (err) {
@@ -146,13 +151,54 @@ export default function SupplierRegisterPage() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="businessPhone">Business Phone</Label>
+                  <Label htmlFor="businessPhone">Business Phone *</Label>
                   <Input
                     id="businessPhone"
                     name="businessPhone"
                     type="tel"
-                    placeholder="+237 6XX XXX XXX"
+                    required
+                    placeholder="024 XXX XXXX"
                     value={formData.businessPhone}
+                    onChange={handleChange}
+                    disabled={isLoading}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="businessAddress">Business Address *</Label>
+                <Input
+                  id="businessAddress"
+                  name="businessAddress"
+                  required
+                  placeholder="Shop number, street, area"
+                  value={formData.businessAddress}
+                  onChange={handleChange}
+                  disabled={isLoading}
+                />
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="city">City *</Label>
+                  <Input
+                    id="city"
+                    name="city"
+                    required
+                    placeholder="Accra"
+                    value={formData.city}
+                    onChange={handleChange}
+                    disabled={isLoading}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="region">Region *</Label>
+                  <Input
+                    id="region"
+                    name="region"
+                    required
+                    placeholder="Greater Accra"
+                    value={formData.region}
                     onChange={handleChange}
                     disabled={isLoading}
                   />

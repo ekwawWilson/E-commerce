@@ -33,9 +33,10 @@ export async function getSupplier(req: Request, res: Response, next: NextFunctio
 export async function getSupplierProducts(req: Request, res: Response, next: NextFunction) {
   try {
     const supplier = await supplierService.getSupplierByIdOrSlug(req.params.idOrSlug);
+    // The storefront only ever lists a supplier's active products
     const { products, total, page, limit } = await supplierService.getSupplierProducts(
       supplier.id,
-      req.query
+      { page: Number(req.query.page) || undefined, limit: Number(req.query.limit) || undefined, active: true }
     );
     return paginatedResponse(res, products, page, limit, total);
   } catch (error) {

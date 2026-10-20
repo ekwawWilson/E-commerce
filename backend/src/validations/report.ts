@@ -7,7 +7,8 @@ export const generateReportSchema = z.object({
   type: z.nativeEnum(ReportType),
   startDate: z.coerce.date(),
   endDate: z.coerce.date(),
-  format: z.enum(['pdf', 'csv']).default('pdf'),
+  // Reports are CSV; 'pdf' is still accepted from older clients and served as CSV
+  format: z.enum(['pdf', 'csv']).default('csv').transform(() => 'csv' as const),
 });
 
 // Report list query schema

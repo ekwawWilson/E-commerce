@@ -15,6 +15,7 @@ import {
   ListChecks,
   Warehouse,
   Building2,
+  Tag,
 } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
@@ -57,6 +58,11 @@ const navItems = [
     title: 'Suppliers',
     href: '/admin/suppliers',
     icon: Building2,
+  },
+  {
+    title: 'Coupons',
+    href: '/admin/coupons',
+    icon: Tag,
   },
   {
     title: 'Reports',

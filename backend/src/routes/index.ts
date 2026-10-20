@@ -19,6 +19,10 @@ import { customerAuthRoutes } from '../modules/customer-auth';
 // Supplier portal routes
 import { supplierPortalRoutes } from '../modules/supplier-portal';
 
+// Password reset (all account types) and coupons
+import { passwordResetRoutes } from '../modules/account-tokens/password-reset.routes';
+import { couponRoutes } from '../modules/coupons/coupon.routes';
+
 // Admin routes
 import adminRoutes from './admin';
 
@@ -39,6 +43,8 @@ router.use('/payments', paymentRoutes);
 router.use('/auth', authRoutes);
 router.use('/supplier-auth', supplierAuthRoutes);
 router.use('/customers', customerAuthRoutes);
+router.use('/password-reset', passwordResetRoutes);
+router.use('/coupons', couponRoutes);
 
 // Supplier portal routes
 router.use('/supplier-portal', supplierPortalRoutes);

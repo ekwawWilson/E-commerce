@@ -18,11 +18,24 @@ export interface UploadedImage {
   isPrimary: boolean;
 }
 
+// Where images are uploaded to and deleted from. Admin screens use the admin
+// API; supplier screens pass the supplier portal's, which needs a supplier login.
+export interface ImageUploader {
+  upload: (files: File[], folder: string) => Promise<{ success: boolean; data?: any[] }>;
+  remove: (publicId: string) => Promise<unknown>;
+}
+
+const adminUploader: ImageUploader = {
+  upload: (files, folder) => adminApi.uploadImages(files, folder),
+  remove: (publicId) => adminApi.deleteImage(publicId),
+};
+
 interface ImageUploadProps {
   images: UploadedImage[];
   onImagesChange: (images: UploadedImage[]) => void;
   maxImages?: number;
   folder?: string;
+  uploader?: ImageUploader;
 }
 
 export function ImageUpload({
@@ -30,6 +43,7 @@ export function ImageUpload({
   onImagesChange,
   maxImages = 6,
   folder = 'products',
+  uploader = adminUploader,
 }: ImageUploadProps) {
   const [isUploading, setIsUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
@@ -61,7 +75,7 @@ export function ImageUpload({
       setIsUploading(true);
 
       try {
-        const response = await adminApi.uploadImages(filesToUpload, folder);
+        const response = await uploader.upload(filesToUpload, folder);
 
         if (response.success && response.data) {
           const newImages: UploadedImage[] = response.data.map(
@@ -81,7 +95,7 @@ export function ImageUpload({
         setIsUploading(false);
       }
     },
-    [images, maxImages, folder, onImagesChange]
+    [images, maxImages, folder, onImagesChange, uploader]
   );
 
   const handleDrag = useCallback((e: React.DragEvent) => {
@@ -108,7 +122,7 @@ export function ImageUpload({
     const imageToRemove = images[index];
 
     try {
-      await adminApi.deleteImage(imageToRemove.publicId);
+      await uploader.remove(imageToRemove.publicId);
     } catch (error) {
       console.error('Failed to delete image:', error);
     }

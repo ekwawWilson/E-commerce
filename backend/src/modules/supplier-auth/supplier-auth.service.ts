@@ -3,7 +3,7 @@ import jwt, { SignOptions } from 'jsonwebtoken';
 import prisma from '../../config/database';
 import config from '../../config';
 import { SupplierRole } from '@prisma/client';
-import { NotFoundError, UnauthorizedError } from '../../middleware/errorHandler';
+import { NotFoundError, UnauthorizedError, AppError } from '../../middleware/errorHandler';
 import { slugify } from '../../utils/helpers';
 
 export interface SupplierLoginData {
@@ -26,6 +26,7 @@ export interface SupplierRegisterData {
 
   // Owner account
   ownerName: string;
+  ownerEmail?: string; // Defaults to the store email
   ownerPassword: string;
   ownerPhone?: string;
 }
@@ -43,8 +44,8 @@ export class SupplierAuthService {
    * Login supplier admin
    */
   async login(data: SupplierLoginData) {
-    const supplierAdmin = await prisma.supplierAdmin.findUnique({
-      where: { email: data.email },
+    const supplierAdmin = await prisma.supplierAdmin.findFirst({
+      where: { email: { equals: data.email, mode: 'insensitive' } },
       include: {
         supplier: true,
       },
@@ -73,18 +74,7 @@ export class SupplierAuthService {
       data: { lastLoginAt: new Date() },
     });
 
-    // Generate token
-    const tokenPayload: SupplierTokenPayload = {
-      type: 'supplier',
-      supplierAdminId: supplierAdmin.id,
-      supplierId: supplierAdmin.supplierId,
-      email: supplierAdmin.email,
-      role: supplierAdmin.role,
-    };
-
-    const token = jwt.sign(tokenPayload, config.jwtSecret, {
-      expiresIn: config.jwtExpiresIn,
-    } as SignOptions);
+    const token = this.signToken(supplierAdmin);
 
     return {
       token,
@@ -122,18 +112,20 @@ export class SupplierAuthService {
 
     if (existingSupplier) {
       if (existingSupplier.email === data.email) {
-        throw new Error('A supplier with this email already exists');
+        throw new AppError('A supplier with this email already exists', 409);
       }
-      throw new Error('A supplier with this name already exists');
+      throw new AppError('A supplier with this name already exists', 409);
     }
 
+    const ownerEmail = data.ownerEmail || data.email;
+
     // Check if admin email exists
-    const existingAdmin = await prisma.supplierAdmin.findUnique({
-      where: { email: data.email },
+    const existingAdmin = await prisma.supplierAdmin.findFirst({
+      where: { email: { equals: ownerEmail, mode: 'insensitive' } },
     });
 
     if (existingAdmin) {
-      throw new Error('An account with this email already exists');
+      throw new AppError('An account with this email already exists', 409);
     }
 
     // Hash password
@@ -162,7 +154,7 @@ export class SupplierAuthService {
       const supplierAdmin = await tx.supplierAdmin.create({
         data: {
           supplierId: supplier.id,
-          email: data.email,
+          email: ownerEmail,
           passwordHash,
           name: data.ownerName,
           phone: data.ownerPhone,
@@ -252,12 +244,27 @@ export class SupplierAuthService {
     }
 
     const passwordHash = await bcrypt.hash(newPassword, 12);
+    // passwordChangedAt logs out other sessions; this one gets a fresh token
     await prisma.supplierAdmin.update({
       where: { id: supplierAdminId },
-      data: { passwordHash },
+      data: { passwordHash, passwordChangedAt: new Date() },
     });
 
-    return { message: 'Password changed successfully' };
+    return { message: 'Password changed successfully', token: this.signToken(supplierAdmin) };
+  }
+
+  private signToken(supplierAdmin: { id: string; supplierId: string; email: string; role: SupplierRole }) {
+    const tokenPayload: SupplierTokenPayload = {
+      type: 'supplier',
+      supplierAdminId: supplierAdmin.id,
+      supplierId: supplierAdmin.supplierId,
+      email: supplierAdmin.email,
+      role: supplierAdmin.role,
+    };
+
+    return jwt.sign(tokenPayload, config.jwtSecret, {
+      expiresIn: config.jwtExpiresIn,
+    } as SignOptions);
   }
 
   /**
@@ -276,7 +283,7 @@ export class SupplierAuthService {
     });
 
     if (existingAdmin) {
-      throw new Error('An account with this email already exists');
+      throw new AppError('An account with this email already exists', 409);
     }
 
     const passwordHash = await bcrypt.hash(data.password, 12);
@@ -337,7 +344,7 @@ export class SupplierAuthService {
     }
 
     if (staff.role === 'OWNER') {
-      throw new Error('Cannot deactivate owner account');
+      throw new AppError('Cannot deactivate owner account', 400);
     }
 
     await prisma.supplierAdmin.update({
@@ -361,7 +368,7 @@ export class SupplierAuthService {
     }
 
     if (staff.role === 'OWNER') {
-      throw new Error('Cannot delete owner account');
+      throw new AppError('Cannot delete owner account', 400);
     }
 
     await prisma.supplierAdmin.delete({

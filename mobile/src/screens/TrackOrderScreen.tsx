@@ -24,13 +24,15 @@ const ORDER_STATUSES = [
 
 export function TrackOrderScreen() {
   const [orderNumber, setOrderNumber] = useState('');
+  // Phone or email used at checkout; required so others can't look orders up
+  const [contact, setContact] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [order, setOrder] = useState<Order | null>(null);
   const [notFound, setNotFound] = useState(false);
 
   const handleTrack = async () => {
-    if (!orderNumber.trim()) {
-      Alert.alert('Error', 'Please enter an order number');
+    if (!orderNumber.trim() || !contact.trim()) {
+      Alert.alert('Error', 'Please enter your order number and the phone number or email used at checkout');
       return;
     }
 
@@ -38,7 +40,7 @@ export function TrackOrderScreen() {
     setNotFound(false);
 
     try {
-      const response = await api.trackOrder(orderNumber.trim());
+      const response = await api.trackOrder(orderNumber.trim(), contact.trim());
 
       if (response.success && response.data) {
         setOrder(response.data);
@@ -78,7 +80,7 @@ export function TrackOrderScreen() {
         <View style={styles.header}>
           <Text style={styles.headerTitle}>TRACK ORDER</Text>
           <Text style={styles.headerSubtitle}>
-            Enter your order number to track delivery status
+            Enter your order number and the phone or email used at checkout
           </Text>
         </View>
 
@@ -93,6 +95,18 @@ export function TrackOrderScreen() {
               value={orderNumber}
               onChangeText={setOrderNumber}
               autoCapitalize="characters"
+            />
+          </View>
+          <View style={styles.inputWrapper}>
+            <Ionicons name="call-outline" size={20} color={colors.gray400} />
+            <TextInput
+              style={styles.input}
+              placeholder="Phone number or email"
+              placeholderTextColor={colors.gray400}
+              value={contact}
+              onChangeText={setContact}
+              autoCapitalize="none"
+              keyboardType="email-address"
             />
           </View>
           <TouchableOpacity

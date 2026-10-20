@@ -208,7 +208,11 @@ export default function SupplierSettingsPage() {
     setSuccess('');
 
     try {
-      await supplierApi.changePassword(passwordData.currentPassword, passwordData.newPassword);
+      const result = await supplierApi.changePassword(passwordData.currentPassword, passwordData.newPassword);
+      // Other sessions are signed out; keep this one with the fresh token
+      if (result?.data?.token) {
+        useSupplierAuthStore.setState({ token: result.data.token });
+      }
       setSuccess('Password changed successfully');
       setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
     } catch (err) {

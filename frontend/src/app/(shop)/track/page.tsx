@@ -28,29 +28,43 @@ import {
   getDeliveryStatusLabel,
 } from '@/lib/utils';
 
+// Tracking needs both the order number and the phone number or email it was
+// placed with, so nobody can look up someone else's order.
+const contactParams = (contact: string) =>
+  contact.includes('@') ? { email: contact } : { phone: contact };
+
 function TrackOrderContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const orderNumberParam = searchParams.get('order') || '';
+  const contactParam = searchParams.get('phone') || searchParams.get('email') || '';
   const [orderNumber, setOrderNumber] = useState(orderNumberParam);
-  const [searchedOrder, setSearchedOrder] = useState(orderNumberParam);
+  const [contact, setContact] = useState(contactParam);
+  const [searched, setSearched] = useState(
+    orderNumberParam && contactParam ? { orderNumber: orderNumberParam, contact: contactParam } : null
+  );
 
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['track-order', searchedOrder],
+    queryKey: ['track-order', searched?.orderNumber, searched?.contact],
     queryFn: async () => {
-      const response = await api.trackOrder(searchedOrder);
+      const response = await api.trackOrder(searched!.orderNumber, contactParams(searched!.contact));
       return response as { success: boolean; data: Order };
     },
-    enabled: !!searchedOrder,
+    enabled: !!searched,
+    retry: false,
   });
 
   const order: Order | null = data?.data || null;
+  const searchedOrder = searched?.orderNumber || '';
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    if (orderNumber.trim()) {
-      setSearchedOrder(orderNumber.trim());
-      router.push(`/track?order=${encodeURIComponent(orderNumber.trim())}`);
+    const number = orderNumber.trim();
+    const value = contact.trim();
+    if (number && value) {
+      setSearched({ orderNumber: number, contact: value });
+      // Only the order number goes in the URL; the phone/email stays out of history
+      router.push(`/track?order=${encodeURIComponent(number)}`);
     }
   };
 
@@ -75,14 +89,20 @@ function TrackOrderContent() {
         {/* Search Form */}
         <Card className="mb-8">
           <CardContent className="pt-6">
-            <form onSubmit={handleSearch} className="flex gap-2">
+            <form onSubmit={handleSearch} className="flex flex-col gap-2 sm:flex-row">
               <Input
-                placeholder="Enter order number (e.g., ORD-XXXXX)"
+                placeholder="Order number (e.g., ORD-XXXXX)"
                 value={orderNumber}
                 onChange={(e) => setOrderNumber(e.target.value)}
                 className="flex-1"
               />
-              <Button type="submit">
+              <Input
+                placeholder="Phone number or email used"
+                value={contact}
+                onChange={(e) => setContact(e.target.value)}
+                className="flex-1"
+              />
+              <Button type="submit" disabled={!orderNumber.trim() || !contact.trim()}>
                 <Search className="mr-2 h-4 w-4" />
                 Track
               </Button>
@@ -100,10 +120,10 @@ function TrackOrderContent() {
               <XCircle className="mx-auto h-12 w-12 text-muted-foreground" />
               <h2 className="mt-4 text-xl font-semibold">Order Not Found</h2>
               <p className="mt-2 text-muted-foreground">
-                We couldn&apos;t find an order with number &quot;{searchedOrder}&quot;
+                We couldn&apos;t find order &quot;{searchedOrder}&quot; with that phone number or email.
               </p>
               <p className="mt-1 text-sm text-muted-foreground">
-                Please check the order number and try again.
+                Please check both and try again.
               </p>
             </CardContent>
           </Card>
@@ -145,7 +165,7 @@ function TrackOrderContent() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                {order.deliveryStatus === 'CANCELLED' ? (
+                {order.cancelledAt || order.deliveryStatus === 'CANCELLED' ? (
                   <div className="flex items-center gap-3 rounded-lg bg-red-50 p-4">
                     <XCircle className="h-8 w-8 text-red-600" />
                     <div>
@@ -257,6 +277,12 @@ function TrackOrderContent() {
                     <span className="text-muted-foreground">Subtotal</span>
                     <span>{formatPrice(order.subtotal)}</span>
                   </div>
+                  {Number(order.discount) > 0 && (
+                    <div className="flex justify-between text-sm text-green-700">
+                      <span>Discount</span>
+                      <span>-{formatPrice(order.discount)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Delivery</span>
                     <span>
@@ -286,14 +312,14 @@ function TrackOrderContent() {
         )}
 
         {/* Empty State */}
-        {!searchedOrder && !isLoading && (
+        {!searched && !isLoading && (
           <Card>
             <CardContent className="py-12 text-center">
               <Package className="mx-auto h-12 w-12 text-muted-foreground" />
               <h2 className="mt-4 text-xl font-semibold">Track Your Order</h2>
               <p className="mt-2 text-muted-foreground">
-                Enter your order number above to see the current status of your
-                delivery.
+                Enter your order number and the phone number or email you used at
+                checkout to see the current status of your delivery.
               </p>
             </CardContent>
           </Card>

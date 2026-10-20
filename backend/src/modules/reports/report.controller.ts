@@ -92,7 +92,7 @@ export async function generateReport(req: AuthenticatedRequest, res: Response, n
       req.admin!.id
     );
 
-    return successResponse(res, report, 'Report generation queued', 202);
+    return successResponse(res, report, 'Report ready to download', 201);
   } catch (error) {
     next(error);
   }
@@ -135,6 +135,21 @@ export async function getReportSummary(req: AuthenticatedRequest, res: Response,
     const report = await reportService.getReportSummary(start, end);
 
     return successResponse(res, report);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Download a report as CSV
+ */
+export async function downloadReport(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try {
+    const { filename, csv } = await reportService.buildReportCsv(req.params.id);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    // Byte-order mark so Excel reads the file as UTF-8 (e.g. the GH₵ sign)
+    return res.send('\uFEFF' + csv);
   } catch (error) {
     next(error);
   }

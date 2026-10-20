@@ -86,6 +86,17 @@ router.get(
 );
 
 /**
+ * @route   GET /api/admin/reports/:id/download
+ * @desc    Download a generated report as CSV
+ * @access  Admin
+ */
+router.get(
+  '/:id/download',
+  validate(idParamsSchema, 'params'),
+  reportController.downloadReport
+);
+
+/**
  * @route   GET /api/admin/reports/:id
  * @desc    Get report by ID
  * @access  Admin

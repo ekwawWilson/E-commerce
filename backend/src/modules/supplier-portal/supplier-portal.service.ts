@@ -7,7 +7,7 @@ import {
 import { Prisma, FulfillmentStatus } from '@prisma/client';
 import { slugify, parsePaginationParams } from '../../utils/helpers';
 import { NotFoundError } from '../../middleware/errorHandler';
-import { orderService } from '../orders/order.service';
+import { updateItemFulfillment } from '../orders/fulfillment';
 
 export interface SupplierProductListParams {
   page?: number;
@@ -414,41 +414,7 @@ export class SupplierPortalService {
     status: FulfillmentStatus,
     trackingNumber?: string
   ) {
-    const orderItem = await prisma.orderItem.findFirst({
-      where: { id: orderItemId, supplierId },
-    });
-
-    if (!orderItem) {
-      throw new NotFoundError('Order item');
-    }
-
-    const updates: Prisma.OrderItemUpdateInput = {
-      fulfillmentStatus: status,
-    };
-
-    if (trackingNumber) {
-      updates.trackingNumber = trackingNumber;
-    }
-
-    if (status === 'SHIPPED') {
-      updates.shippedAt = new Date();
-    } else if (status === 'DELIVERED') {
-      updates.deliveredAt = new Date();
-    }
-
-    const updatedItem = await prisma.orderItem.update({
-      where: { id: orderItemId },
-      data: updates,
-      include: {
-        order: {
-          select: { orderNumber: true },
-        },
-      },
-    });
-
-    await orderService.reconcileDeliveryStatus(orderItem.orderId);
-
-    return updatedItem;
+    return updateItemFulfillment(supplierId, orderItemId, { status, trackingNumber });
   }
 
   /**

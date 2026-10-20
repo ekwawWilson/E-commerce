@@ -4,6 +4,7 @@ import prisma from '../../config/database';
 import config from '../../config';
 import { SupplierRole } from '@prisma/client';
 import { UnauthorizedError, ForbiddenError } from '../../middleware/errorHandler';
+import { issuedBeforePasswordChange } from '../../middleware/auth';
 
 export interface SupplierAuthenticatedRequest extends Request {
   supplierAdmin?: {
@@ -23,6 +24,7 @@ interface SupplierTokenPayload {
   supplierId: string;
   email: string;
   role: SupplierRole;
+  iat?: number;
 }
 
 /**
@@ -59,6 +61,10 @@ export async function authenticateSupplier(
 
     if (!supplierAdmin || !supplierAdmin.active) {
       throw new UnauthorizedError('Account not found or inactive');
+    }
+
+    if (issuedBeforePasswordChange(decoded.iat, supplierAdmin.passwordChangedAt)) {
+      throw new UnauthorizedError('Session expired, please sign in again');
     }
 
     // Attach to request

@@ -24,6 +24,7 @@ enum PaymentStatus {
   PENDING
   PAID
   FAILED
+  REFUNDED       // Money returned to the customer after a paid order was cancelled
 }
 
 enum DeliveryStatus {
@@ -90,6 +91,23 @@ enum PayoutStatus {
   FAILED         // Payment failed
 }
 
+enum AccountType {
+  CUSTOMER
+  SUPPLIER       // A SupplierAdmin login
+  ADMIN
+}
+
+enum AuthTokenPurpose {
+  PASSWORD_RESET
+  EMAIL_VERIFICATION
+  PHONE_VERIFICATION
+}
+
+enum DiscountType {
+  PERCENTAGE
+  FIXED
+}
+
 // ============================================
 // ADMIN & AUTHENTICATION
 // ============================================
@@ -102,6 +120,8 @@ model Admin {
   role         AdminRole @default(ADMIN)
   active       Boolean   @default(true)
   lastLoginAt  DateTime?
+  // Tokens issued before this are rejected, so a password change logs out old sessions
+  passwordChangedAt DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
@@ -144,6 +164,8 @@ model Customer {
 
   // Account Status
   active              Boolean          @default(true)
+  // Tokens issued before this are rejected, so a password change logs out old sessions
+  passwordChangedAt   DateTime?
 
   createdAt           DateTime         @default(now())
   updatedAt           DateTime         @updatedAt
@@ -267,6 +289,8 @@ model SupplierAdmin {
 
   active        Boolean      @default(true)
   lastLoginAt   DateTime?
+  // Tokens issued before this are rejected, so a password change logs out old sessions
+  passwordChangedAt DateTime?
 
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
@@ -623,6 +647,13 @@ model Order {
 
   notes           String?        // Internal order notes
 
+  // Discount
+  couponCode      String?        // Coupon applied at checkout; amount is in `discount`
+
+  // Cancellation (stock is returned and unshipped items are cancelled)
+  cancelledAt     DateTime?
+  cancelReason    String?
+
   // Multi-supplier tracking
   supplierCount   Int            @default(1) // Number of suppliers in this order
 
@@ -641,6 +672,7 @@ model Order {
   @@index([paymentStatus])
   @@index([deliveryStatus])
   @@index([createdAt])
+  @@index([cancelledAt])
   @@map("orders")
 }
 
@@ -659,6 +691,10 @@ model Payment {
   paidAt              DateTime?
   failedAt            DateTime?
   failedReason        String?
+  // Refunds are paid out manually (e.g. MoMo transfer) and recorded here
+  refundedAt          DateTime?
+  refundReason        String?
+  refundReference     String?
   webhookPayload      Json?               // Store webhook data for debugging/audit
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
@@ -739,6 +775,10 @@ model OrderItem {
   commissionRate    Decimal           @db.Decimal(5, 2) @default(0)
   commissionAmount  Decimal           @db.Decimal(10, 2) @default(0)
 
+  // The payout this item was paid out in. An item belongs to at most one
+  // payout, which is what stops overlapping payout periods paying it twice.
+  payoutId          String?
+
   // Supplier-specific fulfillment
   fulfillmentStatus FulfillmentStatus @default(PENDING)
   fulfilledAt       DateTime?
@@ -756,10 +796,12 @@ model OrderItem {
   // history. The snapshot columns keep the line readable without it.
   variant           ProductVariant?   @relation(fields: [variantId], references: [id], onDelete: SetNull)
   supplier          Supplier?         @relation(fields: [supplierId], references: [id])
+  payout            SupplierPayout?   @relation(fields: [payoutId], references: [id], onDelete: SetNull)
 
   @@index([orderId])
   @@index([supplierId])
   @@index([variantId])
+  @@index([payoutId])
   @@index([fulfillmentStatus])
   @@index([supplierId, fulfillmentStatus])
   @@map("order_items")
@@ -800,11 +842,60 @@ model SupplierPayout {
   updatedAt         DateTime     @updatedAt
 
   supplier          Supplier     @relation(fields: [supplierId], references: [id])
+  orderItems        OrderItem[]
 
   @@index([supplierId])
   @@index([status])
   @@index([periodStart, periodEnd])
   @@map("supplier_payouts")
+}
+
+// ============================================
+// COUPONS
+// ============================================
+
+// Discounts are platform-funded: suppliers are paid on the full item price and
+// the discount comes out of the platform's side.
+model Coupon {
+  id           String       @id @default(cuid())
+  code         String       @unique // Stored uppercase
+  description  String?
+  type         DiscountType
+  value        Decimal      @db.Decimal(10, 2) // Percent (0-100) or fixed amount
+  minSubtotal  Decimal?     @db.Decimal(10, 2)
+  maxDiscount  Decimal?     @db.Decimal(10, 2) // Cap for percentage coupons
+  usageLimit   Int?         // Total uses allowed; null = unlimited
+  usedCount    Int          @default(0)
+  startsAt     DateTime?
+  endsAt       DateTime?
+  active       Boolean      @default(true)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([active])
+  @@map("coupons")
+}
+
+// ============================================
+// AUTH TOKENS (password reset, email/phone verification)
+// ============================================
+
+// Only a SHA-256 hash of the token is stored, so a database leak can't be
+// replayed. Phone codes are hashed together with the account ID.
+model AuthToken {
+  id          String           @id @default(cuid())
+  accountType AccountType
+  accountId   String
+  purpose     AuthTokenPurpose
+  tokenHash   String           @unique
+  attempts    Int              @default(0) // Failed guesses, for short numeric codes
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime         @default(now())
+
+  @@index([accountType, accountId, purpose])
+  @@index([expiresAt])
+  @@map("auth_tokens")
 }
 
 // ============================================

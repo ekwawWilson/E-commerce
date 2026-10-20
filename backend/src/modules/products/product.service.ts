@@ -71,6 +71,12 @@ export interface CreateProductData {
   featured?: boolean;
 }
 
+// Platform-owned products have no supplier; supplier products are only sold
+// while the supplier is ACTIVE.
+const SELLABLE_SUPPLIER: Prisma.ProductWhereInput = {
+  OR: [{ supplierId: null }, { supplier: { status: 'ACTIVE' } }],
+};
+
 export class ProductService {
   /**
    * Get paginated list of products (public)
@@ -80,6 +86,9 @@ export class ProductService {
 
     const where: Prisma.ProductWhereInput = {
       active: params.includeInactive ? undefined : true,
+      // The storefront hides products from suppliers who aren't ACTIVE
+      // (pending, suspended, rejected); admin listings still show them.
+      AND: params.includeInactive ? [] : [SELLABLE_SUPPLIER],
     };
 
     // Category filter
@@ -192,6 +201,7 @@ export class ProductService {
       where: {
         OR: [{ id: idOrSlug }, { slug: idOrSlug }],
         active: true,
+        AND: [SELLABLE_SUPPLIER],
       },
       include: {
         categories: {
@@ -406,7 +416,7 @@ export class ProductService {
    */
   async getFeaturedProducts(limit = 8) {
     return prisma.product.findMany({
-      where: { active: true, featured: true },
+      where: { active: true, featured: true, AND: [SELLABLE_SUPPLIER] },
       include: {
         images: {
           where: { isPrimary: true },

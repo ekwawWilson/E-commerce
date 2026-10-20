@@ -1,10 +1,18 @@
 import prisma from '../../config/database';
 import bcrypt from 'bcryptjs';
+import { randomBytes } from 'crypto';
 import jwt, { SignOptions } from 'jsonwebtoken';
 import config from '../../config';
-import { PaymentMethod } from '@prisma/client';
+import { AccountType, AuthTokenPurpose, PaymentMethod } from '@prisma/client';
 import { NotFoundError, AppError, UnauthorizedError } from '../../middleware/errorHandler';
-import { sendWelcomeEmail } from '../notifications/email.service';
+import { sendWelcomeEmail, sendEmailVerificationEmail } from '../notifications/email.service';
+import { sendSmsNow } from '../notifications/sms.providers';
+import { accountTokenService } from '../account-tokens/account-token.service';
+import { orderService } from '../orders/order.service';
+import logger from '../../utils/logger';
+import { verifyGoogleIdToken } from './google-verify';
+
+const emailMatches = (email: string) => ({ equals: email, mode: 'insensitive' as const });
 
 export interface CustomerRegisterData {
   email: string;
@@ -17,14 +25,6 @@ export interface CustomerLoginData {
   email?: string;
   phone?: string;
   password: string;
-}
-
-export interface GoogleAuthData {
-  idToken: string;
-  email: string;
-  name: string;
-  profileImage?: string;
-  googleId: string;
 }
 
 export interface UpdateProfileData {
@@ -52,8 +52,8 @@ export class CustomerAuthService {
    */
   async register(data: CustomerRegisterData) {
     // Check if email already exists
-    const existingByEmail = await prisma.customer.findUnique({
-      where: { email: data.email },
+    const existingByEmail = await prisma.customer.findFirst({
+      where: { email: emailMatches(data.email) },
     });
 
     if (existingByEmail) {
@@ -101,6 +101,10 @@ export class CustomerAuthService {
       // Don't fail registration if email fails
     });
 
+    this.requestEmailVerification(customer.id).catch((error) =>
+      logger.error('Failed to send verification email:', error)
+    );
+
     // Generate token
     const token = this.generateToken(customer);
 
@@ -117,8 +121,8 @@ export class CustomerAuthService {
     let customer;
 
     if (data.email) {
-      customer = await prisma.customer.findUnique({
-        where: { email: data.email },
+      customer = await prisma.customer.findFirst({
+        where: { email: emailMatches(data.email) },
       });
     } else if (data.phone) {
       customer = await prisma.customer.findUnique({
@@ -170,53 +174,53 @@ export class CustomerAuthService {
    * Google OAuth sign-in/sign-up
    * Creates account if doesn't exist, or logs in if exists
    */
-  async googleAuth(data: GoogleAuthData) {
-    // Check if customer exists with this email
-    let customer = await prisma.customer.findUnique({
-      where: { email: data.email },
-    });
+  async googleAuth(idToken: string) {
+    // Identity comes only from the verified token, never the request body
+    const google = await verifyGoogleIdToken(idToken);
+
+    let customer =
+      (await prisma.customer.findUnique({ where: { googleId: google.googleId } })) ??
+      (await prisma.customer.findFirst({
+        where: { email: { equals: google.email, mode: 'insensitive' } },
+      }));
 
     if (customer) {
-      // Customer exists - update Google ID if not set and log in
-      if (!customer.googleId) {
-        customer = await prisma.customer.update({
-          where: { id: customer.id },
-          data: {
-            googleId: data.googleId,
-            profileImage: customer.profileImage || data.profileImage,
-            emailVerified: true, // Google email is verified
-            lastLoginAt: new Date(),
-          },
-        });
-      } else {
-        // Just update last login
-        await prisma.customer.update({
-          where: { id: customer.id },
-          data: { lastLoginAt: new Date() },
-        });
+      if (customer.googleId && customer.googleId !== google.googleId) {
+        throw new UnauthorizedError('This email is linked to a different Google account');
       }
 
       if (!customer.active) {
         throw new UnauthorizedError('Account is disabled');
       }
+
+      // Link Google on first sign-in. Safe because Google has verified the email.
+      customer = await prisma.customer.update({
+        where: { id: customer.id },
+        data: {
+          googleId: google.googleId,
+          profileImage: customer.profileImage || google.picture,
+          emailVerified: true,
+          emailVerifiedAt: customer.emailVerifiedAt ?? new Date(),
+          lastLoginAt: new Date(),
+        },
+      });
     } else {
-      // Create new customer with Google account
-      // Generate a random password hash (user can set password later if needed)
-      const randomPassword = Math.random().toString(36).slice(-12);
-      const passwordHash = await bcrypt.hash(randomPassword, 10);
+      // Unusable random password; the customer can set one via password reset
+      const passwordHash = await bcrypt.hash(randomBytes(32).toString('hex'), 10);
 
       // Generate a placeholder phone (user must update this later)
-      const placeholderPhone = `google_${data.googleId}`;
+      const placeholderPhone = `google_${google.googleId}`;
 
       customer = await prisma.customer.create({
         data: {
-          email: data.email,
+          email: google.email,
           phone: placeholderPhone,
           passwordHash,
-          name: data.name,
-          profileImage: data.profileImage,
-          googleId: data.googleId,
+          name: google.name,
+          profileImage: google.picture,
+          googleId: google.googleId,
           emailVerified: true, // Google email is verified
+          emailVerifiedAt: new Date(),
           phoneVerified: false,
         },
       });
@@ -298,8 +302,8 @@ export class CustomerAuthService {
 
     // Check email uniqueness if updating
     if (data.email && data.email !== customer.email) {
-      const existing = await prisma.customer.findUnique({
-        where: { email: data.email },
+      const existing = await prisma.customer.findFirst({
+        where: { email: emailMatches(data.email), id: { not: customerId } },
       });
       if (existing) {
         throw new AppError('Email is already in use', 409);
@@ -316,10 +320,25 @@ export class CustomerAuthService {
       }
     }
 
+    // A pending verification belongs to the old address/number
+    const changedPurposes: AuthTokenPurpose[] = [];
+    if (data.email && data.email !== customer.email) changedPurposes.push(AuthTokenPurpose.EMAIL_VERIFICATION);
+    if (data.phone && data.phone !== customer.phone) changedPurposes.push(AuthTokenPurpose.PHONE_VERIFICATION);
+    if (changedPurposes.length > 0) {
+      await prisma.authToken.deleteMany({
+        where: { accountType: AccountType.CUSTOMER, accountId: customerId, purpose: { in: changedPurposes }, usedAt: null },
+      });
+    }
+
     const updatedCustomer = await prisma.customer.update({
       where: { id: customerId },
       data: {
-        ...data,
+        // Listed explicitly so no other column can be written from the request
+        name: data.name,
+        email: data.email,
+        phone: data.phone,
+        profileImage: data.profileImage,
+        preferredPaymentMethod: data.preferredPaymentMethod,
         // Reset verification if email/phone changed
         emailVerified: data.email && data.email !== customer.email ? false : undefined,
         phoneVerified: data.phone && data.phone !== customer.phone ? false : undefined,
@@ -360,12 +379,13 @@ export class CustomerAuthService {
 
     const passwordHash = await bcrypt.hash(newPassword, 10);
 
+    // passwordChangedAt logs out other sessions; this one gets a fresh token
     await prisma.customer.update({
       where: { id: customerId },
-      data: { passwordHash },
+      data: { passwordHash, passwordChangedAt: new Date() },
     });
 
-    return { success: true };
+    return { success: true, token: this.generateToken(customer) };
   }
 
   /**
@@ -397,8 +417,8 @@ export class CustomerAuthService {
 
     const address = await prisma.customerAddress.create({
       data: {
-        customerId,
         ...data,
+        customerId,
         isDefault: data.isDefault || addressCount === 0,
       },
     });
@@ -527,6 +547,157 @@ export class CustomerAuthService {
     }
 
     return order;
+  }
+
+  /**
+   * Cancel one of the customer's own orders, while it hasn't been prepared yet
+   */
+  async cancelOrder(customerId: string, orderId: string, reason: string) {
+    return orderService.cancelOrder(orderId, { type: 'customer', customerId }, reason);
+  }
+
+  // ============================================
+  // WISHLIST
+  // ============================================
+
+  async getWishlist(customerId: string) {
+    const items = await prisma.wishlistItem.findMany({
+      where: { customerId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    // WishlistItem has no foreign key to Product, so skip products that have
+    // since been removed or deactivated.
+    const products = await prisma.product.findMany({
+      where: {
+        id: { in: items.map((i) => i.productId) },
+        active: true,
+        OR: [{ supplierId: null }, { supplier: { status: 'ACTIVE' } }],
+      },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        price: true,
+        comparePrice: true,
+        currency: true,
+        stock: true,
+        images: { where: { isPrimary: true }, take: 1, select: { url: true } },
+      },
+    });
+    const byId = new Map(products.map((p) => [p.id, p]));
+
+    return items
+      .filter((i) => byId.has(i.productId))
+      .map((i) => ({ productId: i.productId, addedAt: i.createdAt, product: byId.get(i.productId)! }));
+  }
+
+  async addToWishlist(customerId: string, productId: string) {
+    const product = await prisma.product.findFirst({ where: { id: productId, active: true }, select: { id: true } });
+    if (!product) {
+      throw new NotFoundError('Product');
+    }
+
+    await prisma.wishlistItem.upsert({
+      where: { customerId_productId: { customerId, productId } },
+      create: { customerId, productId },
+      update: {},
+    });
+
+    return { productId };
+  }
+
+  async removeFromWishlist(customerId: string, productId: string) {
+    await prisma.wishlistItem.deleteMany({ where: { customerId, productId } });
+    return { productId };
+  }
+
+  // ============================================
+  // EMAIL & PHONE VERIFICATION
+  // ============================================
+
+  async requestEmailVerification(customerId: string) {
+    const customer = await prisma.customer.findUnique({ where: { id: customerId } });
+    if (!customer) {
+      throw new NotFoundError('Customer');
+    }
+    if (customer.emailVerified) {
+      return { alreadyVerified: true };
+    }
+
+    const token = await accountTokenService.issueLinkToken(
+      AccountType.CUSTOMER,
+      customer.id,
+      AuthTokenPurpose.EMAIL_VERIFICATION
+    );
+    const link = `${config.frontendUrl}/verify-email?token=${encodeURIComponent(token)}`;
+    const sent = await sendEmailVerificationEmail(customer.email, customer.name, link);
+    if (!sent) {
+      throw new AppError('We could not send the verification email. Please try again later.', 503);
+    }
+
+    return { sent: true };
+  }
+
+  async confirmEmail(token: string) {
+    const { accountType, accountId } = await accountTokenService.consumeLinkToken(
+      token,
+      AuthTokenPurpose.EMAIL_VERIFICATION
+    );
+    if (accountType !== AccountType.CUSTOMER) {
+      throw new AppError('This link is invalid or has expired. Please request a new one.', 400);
+    }
+
+    await prisma.customer.update({
+      where: { id: accountId },
+      data: { emailVerified: true, emailVerifiedAt: new Date() },
+    });
+
+    return { verified: true };
+  }
+
+  async requestPhoneVerification(customerId: string) {
+    const customer = await prisma.customer.findUnique({ where: { id: customerId } });
+    if (!customer) {
+      throw new NotFoundError('Customer');
+    }
+    if (customer.phone.startsWith('google_')) {
+      throw new AppError('Add your phone number to your profile first', 400);
+    }
+    if (customer.phoneVerified) {
+      return { alreadyVerified: true };
+    }
+
+    const code = await accountTokenService.issueCode(
+      AccountType.CUSTOMER,
+      customer.id,
+      AuthTokenPurpose.PHONE_VERIFICATION
+    );
+
+    try {
+      await sendSmsNow(customer.phone, `Your verification code is ${code}. It expires in 10 minutes.`);
+    } catch (error) {
+      logger.error('Failed to send phone verification SMS:', error);
+      throw new AppError('We could not send the SMS. Please try again later.', 503);
+    }
+
+    return { sent: true };
+  }
+
+  async confirmPhone(customerId: string, code: string) {
+    await accountTokenService.consumeCode(
+      AccountType.CUSTOMER,
+      customerId,
+      AuthTokenPurpose.PHONE_VERIFICATION,
+      code
+    );
+
+    await prisma.customer.update({
+      where: { id: customerId },
+      data: { phoneVerified: true, phoneVerifiedAt: new Date() },
+    });
+
+    return { verified: true };
   }
 
   /**

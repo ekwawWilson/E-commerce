@@ -30,12 +30,9 @@ interface Customer {
   addresses?: CustomerAddress[];
 }
 
+// Only the ID token is sent; the server reads the identity from it
 interface GoogleAuthData {
   idToken: string;
-  email: string;
-  name: string;
-  googleId: string;
-  profileImage?: string;
 }
 
 interface CustomerState {
@@ -133,7 +130,7 @@ const customerApi = {
       },
       body: JSON.stringify({ currentPassword, newPassword }),
     });
-    return handleResponse(response);
+    return handleResponse<{ token: string }>(response);
   },
 
   async addAddress(token: string, data: Omit<CustomerAddress, 'id'>) {
@@ -331,7 +328,13 @@ export const useCustomerStore = create<CustomerState>()(
 
         set({ isLoading: true });
         try {
-          await customerApi.changePassword(token, currentPassword, newPassword);
+          // Changing the password signs out other sessions; keep this one
+          // signed in with the fresh token the server returns
+          const response = await customerApi.changePassword(token, currentPassword, newPassword);
+          if (response.data?.token) {
+            Cookies.set(CUSTOMER_TOKEN_KEY, response.data.token, { expires: 7 });
+            set({ token: response.data.token });
+          }
         } finally {
           set({ isLoading: false });
         }
@@ -438,4 +441,21 @@ export function getCustomerToken(): string | null {
 // Helper to check if customer is logged in
 export function isCustomerLoggedIn(): boolean {
   return useCustomerStore.getState().isAuthenticated;
+}
+
+// Authenticated customer requests (orders, verification, wishlist)
+export async function customerFetch<T = unknown>(path: string, init: RequestInit = {}) {
+  const token = getCustomerToken();
+  if (!token) {
+    throw new Error('Please sign in');
+  }
+  const response = await fetch(`${API_BASE_URL}/customers${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      ...(init.headers || {}),
+    },
+  });
+  return handleResponse<T>(response);
 }

@@ -3,6 +3,8 @@ import Cookies from 'js-cookie';
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
 export const CART_ID_COOKIE = 'cart_id';
+// Same cookie the customer store writes; read directly to avoid an import cycle
+const CUSTOMER_TOKEN_COOKIE = 'customer_token';
 
 export class ApiError extends Error {
   constructor(
@@ -22,7 +24,8 @@ async function handleResponse(response: Response): Promise<any> {
   if (!response.ok) {
     throw new ApiError(
       response.status,
-      data.message || 'An error occurred',
+      // The API puts the message in `error`; validation failures also list `errors`
+      data.error || data.message || 'An error occurred',
       data.errors
     );
   }
@@ -50,7 +53,21 @@ export function getHeaders(includeCartId = true): HeadersInit {
     }
   }
 
+  // Signed-in customers send their token so orders are linked to the account
+  const customerToken = Cookies.get(CUSTOMER_TOKEN_COOKIE);
+  if (customerToken) {
+    headers['Authorization'] = `Bearer ${customerToken}`;
+  }
+
   return headers;
+}
+
+export interface CheckoutQuote {
+  subtotal: number;
+  discount: number;
+  couponCode: string | null;
+  deliveryFee: number;
+  total: number;
 }
 
 export const api = {
@@ -230,6 +247,7 @@ export const api = {
     deliveryNotes?: string;
     paymentMethod: 'MOMO' | 'COD';
     momoPhoneNumber?: string;
+    couponCode?: string;
     notes?: string;
   }) {
     const cartId = getCartId();
@@ -256,6 +274,7 @@ export const api = {
         },
         paymentMethod: data.paymentMethod,
         momoPhoneNumber: data.momoPhoneNumber,
+        couponCode: data.couponCode,
         notes: data.notes,
       }),
     });
@@ -269,9 +288,48 @@ export const api = {
     return result;
   },
 
+  // What checkout will charge for this cart, destination and coupon
+  async quote(data: { city: string; region?: string; couponCode?: string }): Promise<{ success: boolean; data: CheckoutQuote }> {
+    const cartId = getCartId();
+    if (!cartId) {
+      throw new ApiError(400, 'Your cart is empty');
+    }
+    const response = await fetch(`${API_BASE_URL}/orders/quote`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ cartId, ...data }),
+    });
+    return handleResponse(response);
+  },
+
+  async previewCoupon(code: string) {
+    const cartId = getCartId();
+    if (!cartId) {
+      throw new ApiError(400, 'Your cart is empty');
+    }
+    const response = await fetch(`${API_BASE_URL}/coupons/preview`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ code, cartId }),
+    });
+    return handleResponse(response);
+  },
+
   // Orders
-  async trackOrder(orderNumber: string) {
-    const response = await fetch(`${API_BASE_URL}/orders/track/${orderNumber}`, {
+  // Tracking needs the order number plus the phone or email it was placed with
+  async trackOrder(orderNumber: string, contact: { phone?: string; email?: string }) {
+    const params = new URLSearchParams({ orderNumber });
+    if (contact.phone) params.set('phone', contact.phone);
+    if (contact.email) params.set('email', contact.email);
+    const response = await fetch(`${API_BASE_URL}/orders/track?${params.toString()}`, {
+      headers: getHeaders(false),
+    });
+    return handleResponse(response);
+  },
+
+  // Order summary by ID (no personal details), for confirmation/payment pages
+  async getOrder(orderId: string) {
+    const response = await fetch(`${API_BASE_URL}/orders/${encodeURIComponent(orderId)}`, {
       headers: getHeaders(false),
     });
     return handleResponse(response);
@@ -287,9 +345,37 @@ export const api = {
     return handleResponse(response);
   },
 
-  async checkPaymentStatus(paymentId: string) {
-    const response = await fetch(`${API_BASE_URL}/payments/${paymentId}/status`, {
+  async verifyPayment(transactionId: string) {
+    const response = await fetch(`${API_BASE_URL}/payments/verify/${encodeURIComponent(transactionId)}`, {
       headers: getHeaders(false),
+    });
+    return handleResponse(response);
+  },
+
+  // Password reset (customers, suppliers and admins)
+  async requestPasswordReset(email: string, accountType: 'CUSTOMER' | 'SUPPLIER' | 'ADMIN' = 'CUSTOMER') {
+    const response = await fetch(`${API_BASE_URL}/password-reset/request`, {
+      method: 'POST',
+      headers: getHeaders(false),
+      body: JSON.stringify({ email, accountType }),
+    });
+    return handleResponse(response);
+  },
+
+  async resetPassword(token: string, password: string) {
+    const response = await fetch(`${API_BASE_URL}/password-reset/confirm`, {
+      method: 'POST',
+      headers: getHeaders(false),
+      body: JSON.stringify({ token, password }),
+    });
+    return handleResponse(response);
+  },
+
+  async confirmEmail(token: string) {
+    const response = await fetch(`${API_BASE_URL}/customers/verify-email/confirm`, {
+      method: 'POST',
+      headers: getHeaders(false),
+      body: JSON.stringify({ token }),
     });
     return handleResponse(response);
   },

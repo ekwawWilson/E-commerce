@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useRouter, usePathname } from 'next/navigation';
 import { ShoppingCart, Clock, Heart, Star, Check } from 'lucide-react';
 import { Product } from '@/types';
 import { Button } from '@/components/ui/button';
@@ -9,6 +10,8 @@ import { ProductImage } from '@/components/ui/product-image';
 import { formatPrice, getImageUrl, cn } from '@/lib/utils';
 import { getHighlightSpecs, getStockState } from '@/lib/product-specs';
 import { useCartStore } from '@/stores/cart';
+import { useWishlistStore } from '@/stores/wishlist';
+import { getCustomerToken } from '@/stores/customer';
 
 interface ProductCardProps {
   product: Product;
@@ -49,8 +52,16 @@ function RatingRow({
 
 export function ProductCard({ product, variant = 'default' }: ProductCardProps) {
   const [isLoading, setIsLoading] = useState(false);
-  const [isWishlisted, setIsWishlisted] = useState(false);
+  const router = useRouter();
+  const pathname = usePathname();
+  const isWishlisted = useWishlistStore((state) => state.productIds.has(product.id));
+  const toggleWishlist = useWishlistStore((state) => state.toggle);
+  const ensureWishlistLoaded = useWishlistStore((state) => state.ensureLoaded);
   const addItem = useCartStore((state) => state.addItem);
+
+  useEffect(() => {
+    ensureWishlistLoaded();
+  }, [ensureWishlistLoaded]);
 
   const imageUrl = getImageUrl(product);
   const stockState = getStockState(product);
@@ -83,10 +94,18 @@ export function ProductCard({ product, variant = 'default' }: ProductCardProps) 
     }
   };
 
-  const handleWishlist = (e: React.MouseEvent) => {
+  const handleWishlist = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsWishlisted((v) => !v);
+    if (!getCustomerToken()) {
+      router.push(`/login?returnTo=${encodeURIComponent(pathname || '/')}`);
+      return;
+    }
+    try {
+      await toggleWishlist(product.id);
+    } catch (error) {
+      console.error('Failed to update wishlist:', error);
+    }
   };
 
   // ---- Horizontal (search results / list view) ----

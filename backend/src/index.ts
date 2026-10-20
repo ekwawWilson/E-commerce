@@ -2,6 +2,19 @@ import app from './app';
 import config from './config';
 import prisma from './config/database';
 import logger from './utils/logger';
+import { orderService } from './modules/orders/order.service';
+
+const UNPAID_ORDER_SWEEP_MS = 15 * 60 * 1000;
+
+// Cancel Mobile Money orders that were never paid, so they stop holding stock
+function sweepUnpaidOrders(): void {
+  orderService
+    .cancelStaleUnpaidOrders()
+    .then((count) => {
+      if (count > 0) logger.info(`Cancelled ${count} unpaid order(s) older than ${config.unpaidOrderTtlHours}h`);
+    })
+    .catch((error) => logger.error('Unpaid order sweep failed:', error));
+}
 
 // Graceful shutdown handler
 async function gracefulShutdown(signal: string): Promise<void> {
@@ -46,6 +59,11 @@ async function startServer(): Promise<void> {
       logger.info(`Server running on port ${config.port} in ${config.nodeEnv} mode`);
       logger.info(`API available at http://localhost:${config.port}/api`);
     });
+
+    if (config.nodeEnv !== 'test') {
+      sweepUnpaidOrders();
+      setInterval(sweepUnpaidOrders, UNPAID_ORDER_SWEEP_MS).unref();
+    }
 
     // Handle graceful shutdown
     process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));

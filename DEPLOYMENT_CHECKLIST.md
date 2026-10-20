@@ -74,6 +74,14 @@
    # Redis - optional; without it no email/SMS/WhatsApp/PDF jobs run
    # REDIS_URL=redis://default:<password>@<host>:6379
 
+   # Google sign-in - the ID token's audience must be one of these
+   GOOGLE_CLIENT_ID=<web-or-server-oauth-client-id>
+   GOOGLE_WEB_CLIENT_ID=<web-oauth-client-id>
+   # GOOGLE_EXTRA_CLIENT_IDS=<android-client-id>,<ios-client-id>
+
+   # Unpaid Mobile Money orders are cancelled (stock released) after this many hours
+   UNPAID_ORDER_TTL_HOURS=24
+
    # Email (if using)
    SMTP_HOST=your-smtp-host
    SMTP_PORT=587
@@ -82,9 +90,17 @@
    EMAIL_FROM=noreply@yourdomain.com
    ```
 
-2. **Build Command**: `npm run build`
-3. **Start Command**: `npm start`
-4. **Deploy**: Push to your connected Git repo
+2. **Build Command**: `npm install && npx prisma generate && npm run build`
+3. **Database migration** (from `backend/`, against the production database):
+   ```bash
+   npx prisma migrate deploy
+   ```
+   On a new, empty production database this creates the whole schema from
+   `prisma/migrations`. Use a separate Supabase project (or database) for
+   production rather than the development one, and run this again whenever a
+   deploy adds a migration.
+4. **Start Command**: `npm start`
+5. **Deploy**: Push to your connected Git repo
 
 ### Frontend (Vercel)
 

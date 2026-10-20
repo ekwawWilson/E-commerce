@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { ImageUpload, UploadedImage } from '@/components/admin/image-upload';
+import { supplierImageUploader } from '@/lib/api/supplier';
 import { ProductSpecifications, ProductSpecification } from '@/components/admin/product-specifications';
 import { ProductDeliveryZones, DeliveryZone } from '@/components/admin/product-delivery-zones';
 import { supplierApi } from '@/lib/api/supplier';
@@ -313,6 +314,7 @@ export default function SupplierEditProductPage() {
                   images={images}
                   onImagesChange={setImages}
                   maxImages={6}
+                  uploader={supplierImageUploader}
                 />
               </CardContent>
             </Card>
