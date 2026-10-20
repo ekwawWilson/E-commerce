@@ -2,7 +2,7 @@
 
 ## Current Issue
 Your frontend is trying to load:
-`https://mdywzxpacqwuedrjbhse.supabase.co/storage/v1/object/public/images/products/1d76df6725bb677e.png`
+`https://<your-project-ref>.supabase.co/storage/v1/object/public/images/products/1d76df6725bb677e.png`
 
 But getting **400 Bad Request** because:
 - The bucket may not exist
@@ -13,14 +13,14 @@ But getting **400 Bad Request** because:
 
 ### 1. Get Your Service Role Key
 
-1. Go to: https://supabase.com/dashboard/project/mdywzxpacqwuedrjbhse/settings/api
+1. Go to: https://supabase.com/dashboard/project/<your-project-ref>/settings/api
 2. Scroll to **"Project API keys"** section
 3. Find the **"service_role"** key (long JWT token)
 4. Copy it (NOT the anon/public key)
 
 ### 2. Create the Storage Bucket
 
-1. Go to: https://supabase.com/dashboard/project/mdywzxpacqwuedrjbhse/storage/buckets
+1. Go to: https://supabase.com/dashboard/project/<your-project-ref>/storage/buckets
 2. Click **"New bucket"**
 3. Settings:
    - **Name**: `images`
@@ -93,7 +93,7 @@ USING (bucket_id = 'images');
 Replace `YOUR_SERVICE_ROLE_KEY_HERE` in backend/.env with the actual service role key from step 1.
 
 ```bash
-SUPABASE_URL=https://mdywzxpacqwuedrjbhse.supabase.co
+SUPABASE_URL=https://<your-project-ref>.supabase.co
 SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJz...your-actual-key
 SUPABASE_STORAGE_BUCKET=images
 ```
@@ -120,7 +120,7 @@ You should see:
 
 After setup, test the image URL directly in your browser:
 ```
-https://mdywzxpacqwuedrjbhse.supabase.co/storage/v1/object/public/images/products/1d76df6725bb677e.png
+https://<your-project-ref>.supabase.co/storage/v1/object/public/images/products/1d76df6725bb677e.png
 ```
 
 If configured correctly, you should either:
@@ -134,14 +134,14 @@ If you still get 400, the bucket policies are not correct.
 - [ ] Bucket named `images` exists
 - [ ] Bucket is marked as **PUBLIC**
 - [ ] At least one storage policy is created (Public Access for SELECT)
-- [ ] Service role key is from the correct project (mdywzxpacqwuedrjbhse)
+- [ ] Service role key is from the correct project (<your-project-ref>)
 - [ ] Test script runs successfully
 
 ## Common Issues
 
 ### Issue: "signature verification failed"
 **Cause**: Service role key is from wrong project
-**Fix**: Get the key from the mdywzxpacqwuedrjbhse project
+**Fix**: Get the key from the <your-project-ref> project
 
 ### Issue: "Bucket not found"
 **Cause**: Bucket doesn't exist
@@ -167,4 +167,4 @@ After storage is working:
 ## Support
 
 If you still have issues, check the Supabase logs:
-https://supabase.com/dashboard/project/mdywzxpacqwuedrjbhse/logs/explorer
+https://supabase.com/dashboard/project/<your-project-ref>/logs/explorer

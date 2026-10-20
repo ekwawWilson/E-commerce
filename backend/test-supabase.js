@@ -41,7 +41,7 @@ async function testStorage() {
     if (!bucketExists) {
       console.error(`\n❌ Bucket "${bucketName}" not found!`);
       console.log('\n📝 To create the bucket:');
-      console.log('1. Go to: https://supabase.com/dashboard/project/mdywzxpacqwuedrjbhse/storage/buckets');
+      console.log('1. Go to: https://supabase.com/dashboard/project/<your-project-ref>/storage/buckets');
       console.log('2. Click "New bucket"');
       console.log(`3. Name: "${bucketName}"`);
       console.log('4. Make it PUBLIC');

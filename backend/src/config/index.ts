@@ -119,7 +119,7 @@ const PLACEHOLDER_JWT_SECRETS = [
  */
 export function assertProductionConfig(
   cfg: Pick<typeof config, 'nodeEnv' | 'jwtSecret' | 'momo'>,
-  rawJwtSecret: string | undefined = process.env.JWT_SECRET
+  rawJwtSecret: string | undefined
 ) {
   if (cfg.nodeEnv !== 'production') return;
 
@@ -143,6 +143,6 @@ export function assertProductionConfig(
   }
 }
 
-assertProductionConfig(config);
+assertProductionConfig(config, process.env.JWT_SECRET);
 
 export default config;

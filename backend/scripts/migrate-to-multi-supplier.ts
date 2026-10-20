@@ -26,7 +26,7 @@ async function main() {
         name: 'Platform Store',
         slug: 'platform-store',
         email: 'store@platform.com',
-        phone: '+237600000000',
+        phone: '+233244000000',
         businessAddress: 'Platform HQ',
         city: 'Douala',
         region: 'Littoral',

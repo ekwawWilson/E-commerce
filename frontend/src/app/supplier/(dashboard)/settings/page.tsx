@@ -382,7 +382,7 @@ export default function SupplierSettingsPage() {
                     name="phone"
                     value={formData.phone}
                     onChange={handleProfileChange}
-                    placeholder="+237 6XX XXX XXX"
+                    placeholder="024 XXX XXXX"
                     disabled={!permissions.canEditProfile}
                   />
                 </div>
@@ -499,7 +499,7 @@ export default function SupplierSettingsPage() {
                       name="mobileMoneyNumber"
                       value={formData.mobileMoneyNumber}
                       onChange={handleProfileChange}
-                      placeholder="+237 6XX XXX XXX"
+                      placeholder="024 XXX XXXX"
                       disabled={!permissions.canEditProfile}
                     />
                   </div>

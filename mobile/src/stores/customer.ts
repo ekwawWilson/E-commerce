@@ -1,9 +1,9 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { API_BASE_URL } from '../lib/config';
 
 const AUTH_TOKEN_KEY = 'customer_auth_token';
 const CUSTOMER_DATA_KEY = 'customer_data';
-const API_BASE_URL = 'http://192.168.0.8:4000/api';
 
 interface CustomerAddress {
   id: string;

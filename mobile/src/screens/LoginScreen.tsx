@@ -32,7 +32,8 @@ try {
 
   // Configure Google Sign-In
   GoogleSignin.configure({
-    webClientId: 'YOUR_WEB_CLIENT_ID', // Replace with actual client ID
+    // Your Google OAuth web client ID, from mobile/.env
+    webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
     offlineAccess: true,
   });
 } catch (error) {

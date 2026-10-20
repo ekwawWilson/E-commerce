@@ -1,26 +1,7 @@
 # Deployment Checklist - E-Commerce App
 
-## ✅ Issues Fixed
-
-### 1. Backend Build & Module Resolution ✅
-- **Problem**: ES module syntax errors on Render
-- **Fix**: Changed TypeScript config from ESNext to CommonJS
-- **Files Changed**: `backend/tsconfig.json`
-- **Status**: ✅ Backend builds and runs successfully
-
-### 2. Supabase Storage Configuration ✅
-- **Problem**: Wrong Supabase project URL in config
-- **Fix**: Updated to correct project (`mdywzxpacqwuedrjbhse`)
-- **Files Changed**:
-  - `backend/.env` - Updated SUPABASE_URL
-  - Note: Still need to add correct SERVICE_ROLE_KEY
-- **Status**: ✅ Storage URL works, bucket is accessible
-
-### 3. Next.js Image Optimization ✅
-- **Problem**: Wrong Supabase hostname in Next.js config
-- **Fix**: Updated from `mjeytynpoecqeypaiojt` to `mdywzxpacqwuedrjbhse`
-- **Files Changed**: `frontend/next.config.js`
-- **Status**: ✅ Image optimization now allows correct domain
+Steps for a first deployment: backend on Render, frontend on Vercel, database
+and image storage on a Supabase project you create for production.
 
 ## 🚀 Deployment Steps
 
@@ -32,8 +13,8 @@
    PORT=4000
 
    # Database
-   DATABASE_URL=postgresql://postgres.<supabase-project-ref>:<db-password>@aws-1-eu-north-1.pooler.supabase.com:6543/postgres?pgbouncer=true
-   DIRECT_URL=postgresql://postgres.<supabase-project-ref>:<db-password>@aws-1-eu-north-1.pooler.supabase.com:5432/postgres
+   DATABASE_URL=postgresql://postgres.<supabase-project-ref>:<db-password>@<your-pooler-host>.pooler.supabase.com:6543/postgres?pgbouncer=true
+   DIRECT_URL=postgresql://postgres.<supabase-project-ref>:<db-password>@<your-pooler-host>.pooler.supabase.com:5432/postgres
 
    # JWT - IMPORTANT: Generate a strong secret (openssl rand -base64 48).
    # The server refuses to start in production if this is missing, shorter
@@ -48,7 +29,7 @@
    FRONTEND_URL=https://your-app.vercel.app
 
    # Supabase Storage
-   SUPABASE_URL=https://mdywzxpacqwuedrjbhse.supabase.co
+   SUPABASE_URL=https://<your-project-ref>.supabase.co
    SUPABASE_SERVICE_KEY=<get-from-supabase-dashboard>
    SUPABASE_STORAGE_BUCKET=images
 
@@ -141,13 +122,13 @@
 ## 📝 Post-Deployment Tasks
 
 ### 1. Get Supabase Service Role Key
-- Go to: https://supabase.com/dashboard/project/mdywzxpacqwuedrjbhse/settings/api
+- Go to: https://supabase.com/dashboard/project/<your-project-ref>/settings/api
 - Copy the **service_role** key
 - Update in Render environment variables
 - Redeploy backend
 
 ### 2. Verify Supabase Storage
-- Go to: https://supabase.com/dashboard/project/mdywzxpacqwuedrjbhse/storage/buckets
+- Go to: https://supabase.com/dashboard/project/<your-project-ref>/storage/buckets
 - Ensure `images` bucket exists and is PUBLIC
 - Verify storage policies are set (see setup-supabase-storage.md)
 
@@ -185,7 +166,7 @@ After deploying frontend to Vercel:
 - Monitor image optimization
 
 ### Database (Supabase)
-- Dashboard: https://supabase.com/dashboard/project/mdywzxpacqwuedrjbhse
+- Dashboard: https://supabase.com/dashboard/project/<your-project-ref>
 - Monitor queries
 - Check storage usage
 

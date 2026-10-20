@@ -14,10 +14,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { useCustomerStore } from '../stores/customer';
 import { RootStackParamList, Order } from '../types';
 import { colors, spacing, fontSize, formatPrice } from '../theme';
+import { API_BASE_URL } from '../lib/config';
 
 type RouteType = RouteProp<RootStackParamList, 'OrderDetail'>;
 
-const API_BASE_URL = 'http://192.168.0.8:4000/api';
 
 export function OrderDetailScreen() {
   const route = useRoute<RouteType>();

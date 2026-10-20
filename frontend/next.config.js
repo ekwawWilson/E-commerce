@@ -13,8 +13,9 @@ const nextConfig = {
         pathname: '/uploads/**',
       },
       {
+        // Supabase Storage (any project; set yours in the backend's SUPABASE_URL)
         protocol: 'https',
-        hostname: 'mdywzxpacqwuedrjbhse.supabase.co',
+        hostname: '*.supabase.co',
         pathname: '/storage/**',
       },
       {
@@ -35,11 +36,6 @@ const nextConfig = {
       {
         protocol: 'https',
         hostname: 'placehold.co',
-        pathname: '/**',
-      },
-      {
-        protocol: 'https',
-        hostname: '*.onrender.com',
         pathname: '/**',
       },
     ],

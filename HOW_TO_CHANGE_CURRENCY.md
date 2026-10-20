@@ -27,9 +27,9 @@ Open your browser and go to:
 http://localhost:3000/admin/login
 ```
 
-Or if using your network IP:
+Or from another device on your network, use your computer's LAN IP:
 ```
-http://192.168.0.8:3000/admin/login
+http://<your-lan-ip>:3000/admin/login
 ```
 
 ### 3. Login with Admin Credentials

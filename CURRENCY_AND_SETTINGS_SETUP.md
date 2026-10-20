@@ -202,12 +202,7 @@ curl -X PUT http://localhost:4000/api/settings/currency_settings \
 
 Check current settings:
 ```bash
-PGPASSWORD=<db-password> psql \
-  -h aws-1-eu-north-1.pooler.supabase.com \
-  -U postgres.<supabase-project-ref> \
-  -d postgres \
-  -p 5432 \
-  -c "SELECT key, value FROM settings;"
+psql "$DATABASE_URL" -c "SELECT key, value FROM settings;"
 ```
 
 Current values:

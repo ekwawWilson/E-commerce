@@ -159,7 +159,7 @@ Body:
 ```json
 {
   "customerName": "John Doe",
-  "customerPhone": "+237699123456",
+  "customerPhone": "+233244000000",
   "customerEmail": "john@example.com",
   "deliveryAddress": "123 Main St, Douala",
   "paymentMethod": "MOMO",
@@ -196,7 +196,7 @@ Body:
 ```json
 {
   "orderId": "order-id",
-  "phoneNumber": "+237699123456"
+  "phoneNumber": "+233244000000"
 }
 ```
 

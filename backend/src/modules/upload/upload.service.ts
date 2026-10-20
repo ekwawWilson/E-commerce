@@ -188,6 +188,11 @@ export class UploadService {
    * Supabase storage delete
    */
   private async supabaseDelete(filePath: string): Promise<boolean> {
+    if (!supabase) {
+      logger.warn(`Cannot delete ${filePath}: Supabase is not configured`);
+      return false;
+    }
+
     try {
       const { error } = await supabase.storage
         .from(STORAGE_BUCKET)
@@ -283,7 +288,7 @@ export class UploadService {
   ): string {
     // Supabase Storage doesn't have built-in transformations
     // Return the public URL directly
-    if (publicId.startsWith('supabase:')) {
+    if (publicId.startsWith('supabase:') && supabase) {
       const filePath = publicId.replace('supabase:', '');
       const { data } = supabase.storage
         .from(STORAGE_BUCKET)

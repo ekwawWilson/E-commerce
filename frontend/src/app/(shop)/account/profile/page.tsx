@@ -165,7 +165,7 @@ export default function ProfilePage() {
                 </Label>
                 <Input
                   id="phone"
-                  placeholder="+237 6XX XXX XXX"
+                  placeholder="024 XXX XXXX"
                   {...register('phone')}
                 />
                 {errors.phone && (

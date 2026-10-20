@@ -1,23 +1,27 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY || '';
 
-if (!supabaseUrl || !supabaseServiceKey) {
+export const isSupabaseConfigured = () => {
+  return !!(supabaseUrl && supabaseServiceKey && !supabaseUrl.includes('<your-project-ref>'));
+};
+
+if (!isSupabaseConfigured()) {
   console.warn('Supabase credentials not configured. Storage uploads will fall back to local storage.');
 }
 
-export const supabase = createClient(supabaseUrl, supabaseServiceKey, {
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false,
-  },
-});
+// Null when Supabase isn't configured: createClient throws without a URL, which
+// used to stop the whole API from starting. Callers check isSupabaseConfigured().
+export const supabase: SupabaseClient | null = isSupabaseConfigured()
+  ? createClient(supabaseUrl, supabaseServiceKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+    })
+  : null;
 
 export const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'images';
-
-export const isSupabaseConfigured = () => {
-  return !!(supabaseUrl && supabaseServiceKey && supabaseUrl !== 'https://your-project.supabase.co');
-};
 
 export default supabase;
